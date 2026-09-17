@@ -58,6 +58,55 @@ agops adapter install /path/to/project --tools agents,claude,gemini,cursor,copil
 
 Only a marked managed block is added or replaced; existing project instructions are preserved.
 
+## Standing preferences
+
+House style, wording rules, and other standing instructions are recorded in the hub rather than
+hand-edited into each client's instruction file:
+
+```sh
+agops knowledge add --scope global --kind preference \
+  --key response-style --title "Response style" --body-file style.md
+agops setup                 # regenerates the managed block from the hub
+```
+
+`setup` renders every active `preference` entry at `global` scope into the managed block of the
+Codex and Claude instruction files, so the hub is the single source of truth and the files are
+generated. Retiring the entry removes it on the next `setup`:
+
+```sh
+agops knowledge retire --scope global --key response-style --reason "superseded"
+```
+
+Only `global` scope is rendered. Those files are loaded for every session whatever directory it
+starts in, so a `workspace:` or `project:` preference would leak into unrelated work; scoped
+preferences reach agents through the brief and the hook below, which resolve scope per session.
+
+Keep an entry under 500 characters — the brief excerpts longer bodies.
+
+## Hook
+
+`hooks/agops-hook.mjs` reminds an agent to record durable state before it stops, and delivers
+preferences mid-session. Register it with the events your client supports, pointing at the file in
+this checkout — for Claude Code in `~/.claude/settings.json` under `hooks`, for Codex in
+`~/.codex/hooks.json`:
+
+```json
+{ "type": "command", "command": "node \"$HOME/path/to/agops/hooks/agops-hook.mjs\"", "timeout": 10 }
+```
+
+Register it for `SessionStart`, `PostToolUse`, `Stop`, `SessionEnd`, and `UserPromptSubmit`. On
+`Stop` it blocks once when the session edited files in a registered project without recording
+anything in the hub, and releases after one continuation so it cannot loop; an agent that has
+nothing durable to record ends its message with `Hub impact: none — <reason>`. On
+`UserPromptSubmit` it injects the preferences whose scope covers the session, gated on a digest so
+unchanged text is not re-sent every turn. Preferences are read from disk per event, so
+`agops knowledge add` reaches the next prompt without restarting the client.
+
+Routing resolves through the hub's registered projects, so run `agops project register <path>
+[--workspace NAME]` for the repositories you want watched. A hook defect never blocks a session:
+errors are reported and the event is allowed. `AGOPS_HOOK_STATE_DIR` overrides where per-session
+state is kept.
+
 ## Team hub and private sessions
 
 A machine can hold several hubs, called profiles. A typical pair is a `team` hub shared through
@@ -107,7 +156,10 @@ agops task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12
 
 Tasks carry a `tier` (default `standard`); `memory/policy/tiers.yaml` maps model ids to tiers.
 Frontier models plan and review, cheaper models execute, and the hub rejects claims that cross
-tiers. See [docs/protocol.md](docs/protocol.md#execution-tiers).
+tiers. The shipped patterns lead with a wildcard so they also match the prefixed ids that provider
+routes report (Bedrock sends `us.anthropic.claude-opus-5[1m]`); a model no pattern matches resolves
+to the `unknown` tier, which rejects every claim, and the brief says so in its header. See
+[docs/protocol.md](docs/protocol.md#execution-tiers).
 
 To launch a tool with a task already claimed and the lease renewed while it runs, use the managed
 wrapper. Its options precede the tool name:

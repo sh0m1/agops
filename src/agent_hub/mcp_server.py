@@ -14,9 +14,11 @@ ACTOR = os.environ.get("AGENT_HUB_ACTOR", "mcp-agent")
 INSTRUCTIONS = (
     "Read hub_get_brief at session start. Claim an approved ready task before writing. "
     "Checkpoint meaningful progress and complete only with evidence. User instructions override "
-    "stored plans. Never store secrets, .env contents, or raw transcripts."
+    "stored plans. Never store secrets, .env contents, or raw transcripts. "
+    "Prefer CLI and MCP tools over a browser for external systems; use a browser only when no "
+    "CLI or MCP route exists, it is scoped wrong, or it fails."
 )
-mcp = FastMCP("Agent Hub", instructions=INSTRUCTIONS)
+mcp = FastMCP("agops", instructions=INSTRUCTIONS)
 
 
 def hub() -> Hub:

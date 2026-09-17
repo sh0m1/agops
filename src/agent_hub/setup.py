@@ -20,7 +20,13 @@ from .health import doctor
 from .hub import Hub
 from .sessions import default_home
 
-__all__ = ["INSTRUCTIONS", "config_path", "merge_managed_block", "setup"]
+__all__ = [
+    "INSTRUCTIONS",
+    "config_path",
+    "merge_managed_block",
+    "render_instructions",
+    "setup",
+]
 
 MANAGED_START = "<!-- BEGIN AGENT HUB MANAGED -->"
 MANAGED_END = "<!-- END AGENT HUB MANAGED -->"
@@ -48,6 +54,37 @@ enough.
 {MANAGED_END}
 """
 
+PREFERENCE_HEADING = "## Standing preferences"
+
+
+def render_instructions(hub: "Hub | None") -> str:
+    """INSTRUCTIONS plus the hub's active global preferences.
+
+    The instruction files are generated from the hub, so a preference is recorded once with
+    `agops knowledge add --scope global --kind preference` and reaches every client from
+    there. Only global scope is rendered: these files are loaded for every session, whatever
+    directory it starts in, so a workspace- or project-scoped preference does not belong here
+    - the brief and the UserPromptSubmit hook deliver those.
+    """
+    if hub is None:
+        return INSTRUCTIONS
+    try:
+        entries = [
+            entry
+            for entry in hub._current_knowledge()
+            if entry["scope_path"] == "global" and entry["kind"] == "preference"
+        ]
+    except OSError:
+        return INSTRUCTIONS
+    if not entries:
+        return INSTRUCTIONS
+    lines = [PREFERENCE_HEADING, ""]
+    for entry in sorted(entries, key=lambda item: item["key"]):
+        lines.append(f"- {' '.join(entry['body'].split())}")
+    section = "\n".join(lines)
+    return INSTRUCTIONS.replace(MANAGED_END, f"{section}\n{MANAGED_END}")
+
+
 # Codex starts MCP servers with a whitelisted environment; these are forwarded explicitly so a
 # terminal's AGENT_HUB_* settings reach the server exactly as they do under Claude Code.
 CODEX_FORWARDED_ENV = [
@@ -66,6 +103,7 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 def merge_managed_block(path: Path, content: str = INSTRUCTIONS, backup: bool = True) -> None:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    adopting = MANAGED_START not in existing
     if MANAGED_START in existing and MANAGED_END in existing:
         before, rest = existing.split(MANAGED_START, 1)
         _, after = rest.split(MANAGED_END, 1)
@@ -76,7 +114,10 @@ def merge_managed_block(path: Path, content: str = INSTRUCTIONS, backup: bool = 
     if updated == existing:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and backup:
+    # Back up only when first adopting a file that already had content of its own. Once the
+    # block is present the section is regenerated from the hub on every preference change, so
+    # backing it up each time would just accumulate copies of generated text.
+    if path.exists() and backup and adopting:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(path, path.with_name(f"{path.name}.bak.{stamp}"))
     path.write_text(updated, encoding="utf-8")
@@ -133,9 +174,10 @@ def setup(
         profiles.default = name
     save_profiles(profiles, home)
 
+    rendered = render_instructions(hub)
     instructions = {
-        "codex_agents_md": _merge_and_report(home / ".codex" / "AGENTS.md"),
-        "claude_md": _merge_and_report(home / ".claude" / "CLAUDE.md"),
+        "codex_agents_md": _merge_and_report(home / ".codex" / "AGENTS.md", rendered),
+        "claude_md": _merge_and_report(home / ".claude" / "CLAUDE.md", rendered),
     }
     memory_disabled = disable_claude_memory and _disable_claude_memory(home)
 
@@ -212,9 +254,9 @@ No credentials, `.env` contents, private keys, or raw agent transcripts belong h
 """
 
 
-def _merge_and_report(path: Path) -> str:
+def _merge_and_report(path: Path, content: str = INSTRUCTIONS) -> str:
     before = path.read_bytes() if path.exists() else None
-    merge_managed_block(path)
+    merge_managed_block(path, content)
     return "unchanged" if path.read_bytes() == before else "updated"
 
 

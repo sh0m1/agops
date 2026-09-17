@@ -1,14 +1,14 @@
 #!/bin/sh
 # Agent Hub bootstrap: installs uv if needed, installs agent-hub, runs setup.
 #
-#   curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh | sh
 #
 # Add `-s -- --remote <git-url>` to sync the memory across machines. Re-running is safe:
 # setup is idempotent and remembers the remote.
 set -eu
 
 DEFAULT_REF="v0.6.1"
-REPO_URL="https://github.com/sh0m1/agent-hub"
+REPO_URL="https://github.com/sh0m1/agops"
 
 REMOTE=""
 LOCAL=0

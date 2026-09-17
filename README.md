@@ -19,7 +19,7 @@ defaults to — provides only `agent-hub`; every command below works under eithe
 One command on a machine that already runs Claude Code and/or Codex CLI:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh | sh
 ```
 
 It installs `uv` if missing, installs `agops` pinned to a released tag, and runs
@@ -30,14 +30,14 @@ To share the memory across machines, give the same command a Git remote — on t
 it pushes the existing local memory there, on the others it clones it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sh0m1/agent-hub/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh \
   | sh -s -- --remote git@github.com:you/agent-hub-memory.git
 ```
 
 To go back to a machine-local memory, `agops setup --local` detaches and forgets the remote
 (your local history is kept). Other flags: `--ref <tag>` to pick a version, `--keep-claude-memory`
 to leave Claude Code's automatic memory on, `--dry-run` to print the commands without touching
-anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agent-hub@v0.6.1` then
+anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agops@v0.6.1` then
 `agops setup [--remote <url> | --local] [--profile NAME]`.
 
 `setup` adds bounded managed blocks to the Codex and Claude user instruction files and registers

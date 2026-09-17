@@ -12,6 +12,8 @@ dependencies = [
 ]
 
 [project.scripts]
+agops = "agent_hub.cli:main"
+agops-mcp = "agent_hub.mcp_server:main"
 agent-hub = "agent_hub.cli:main"
 agent-hub-mcp = "agent_hub.mcp_server:main"
 

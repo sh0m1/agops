@@ -11,13 +11,18 @@ from .ids import slug
 
 POLICY_RELATIVE_PATH = Path("memory") / "policy" / "tiers.yaml"
 UNKNOWN_TIER = "unknown"
+# The Claude patterns lead with a wildcard because provider routes prefix the model id:
+# Bedrock reports us.anthropic.claude-opus-5[1m], which "claude-opus-*" cannot match, and an
+# unmatched model resolves to UNKNOWN_TIER, which rejects every claim. The gpt-5.6 patterns
+# stay anchored on purpose - "*gpt-5.6-*" would make the pro and terra entries overlap, and
+# overlapping patterns are rejected.
 DEFAULT_POLICY_TEXT = """schema_version: 1
 default_task_tier: standard
 tiers:
   frontier:
-    models: ["claude-opus-*", "claude-fable-*", "gpt-5.6-pro*"]
+    models: ["*claude-opus-*", "*claude-fable-*", "*claude-mythos-*", "gpt-5.6-pro*"]
   standard:
-    models: ["claude-sonnet-*", "gpt-5.6-terra*", "gemini-*-flash*"]
+    models: ["*claude-sonnet-*", "gpt-5.6-terra*", "gemini-*-flash*"]
 """
 
 

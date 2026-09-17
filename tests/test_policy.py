@@ -23,6 +23,21 @@ def test_default_policy_parses_and_maps_models() -> None:
     assert policy.tier_for_model("some-unlisted-model") == UNKNOWN_TIER
 
 
+def test_default_policy_matches_provider_prefixed_model_ids() -> None:
+    """Bedrock, Vertex and gateway routes prefix the model id.
+
+    An anchored "claude-opus-*" leaves every such session on UNKNOWN_TIER, which rejects all
+    claims, so the shipped policy must match the prefixed spellings too.
+    """
+    policy = parse_policy(DEFAULT_POLICY_TEXT)
+    assert policy.tier_for_model("us.anthropic.claude-opus-5[1m]") == "frontier"
+    assert policy.tier_for_model("anthropic.claude-fable-5-1") == "frontier"
+    assert policy.tier_for_model("claude-mythos-5-1") == "frontier"
+    assert policy.tier_for_model("eu.anthropic.claude-sonnet-5") == "standard"
+    # Haiku stays unmapped on purpose: it should not be able to claim plan tasks.
+    assert policy.tier_for_model("us.anthropic.claude-haiku-4-5") == UNKNOWN_TIER
+
+
 def test_task_tier_falls_back_to_default() -> None:
     policy = parse_policy(DEFAULT_POLICY_TEXT)
     assert policy.task_tier({"id": "a"}) == "standard"

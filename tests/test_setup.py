@@ -136,7 +136,9 @@ def test_setup_attaches_a_remote_to_an_existing_local_hub(
     runtime = tmp_path / "rt"
     _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
     bare = tmp_path / "later.git"
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True
+    )
     summary = _setup(str(bare), runtime, fake_home, which_for("agent-hub-mcp"), runner)
     assert summary["remote"] == str(bare)
     assert summary["doctor"]["remote"] == str(bare)

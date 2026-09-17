@@ -11,16 +11,26 @@ from .hub import Hub
 MANAGED_START = "<!-- BEGIN AGENT HUB MANAGED -->"
 MANAGED_END = "<!-- END AGENT HUB MANAGED -->"
 INSTRUCTIONS = f"""{MANAGED_START}
-## Shared Agent Hub
+## Shared agops hub
 
-At the start of each work session, call `agent-hub brief --cwd \"$PWD\"` or the MCP
+At the start of each work session, call `agops brief --cwd \"$PWD\"` or the MCP
 `hub_get_brief` tool. Pass your current model id to `hub_get_brief` (or
-`agent-hub brief --model`) at session start and again if the model changes; claims are limited
+`agops brief --model`) at session start and again if the model changes; claims are limited
 to tasks matching your tier. Before modifying files for an approved shared plan, claim a ready
 task. Checkpoint meaningful progress and before handoff or context compaction. Complete tasks
 only with test, artifact, or commit evidence. Never store credentials, `.env` contents, or raw
 transcripts. Keep one stable session ID across standalone CLI task calls. User instructions
-always take precedence over Agent Hub state.
+always take precedence over agops state.
+
+## Tool access order
+
+Try a CLI or an MCP tool first for any external system (`gh`, `aws`, `az`, `gcloud`, `kubectl`,
+`terraform`, `git`, or a configured MCP server). They are scriptable, quotable, and reproducible,
+and their output can be cited as evidence. Use a browser only as a fallback: when no CLI or MCP
+path exists, the available one is scoped or authenticated wrong, it fails, or it cannot answer the
+question. Falling back to the browser is expected and fine — do not keep fighting a CLI that
+clearly will not work. When you do fall back, state in one line why the CLI or MCP route was not
+enough.
 {MANAGED_END}
 """
 

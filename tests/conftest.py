@@ -25,7 +25,9 @@ def hub_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     remote = tmp_path / "origin.git"
     seed = tmp_path / "seed"
     runtime = tmp_path / "runtime"
-    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(remote)], check=True, capture_output=True
+    )
     subprocess.run(["git", "init", "-b", "main", str(seed)], check=True, capture_output=True)
     git(seed, "config", "user.email", "test@example.com")
     git(seed, "config", "user.name", "Agent Hub Test")

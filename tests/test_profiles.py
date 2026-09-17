@@ -37,7 +37,9 @@ def isolated(tmp_path: Path, fake_home: Path, monkeypatch) -> Path:
 def test_two_profiles_team_and_private(isolated: Path, tmp_path: Path, recording_runner) -> None:
     _, runner = recording_runner
     bare = tmp_path / "team.git"
-    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True
+    )
     seed = tmp_path / "seed"
     subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
     (seed / "memory").mkdir()

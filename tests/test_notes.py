@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from agent_hub.config import config_path
 from agent_hub.hub import Hub
-from agent_hub.notes import NotesBridge
+from agent_hub.notes import NotesBridge, hub_fingerprint
 from agent_hub.state import load_plan
 
 
@@ -124,6 +126,76 @@ def test_connect_rejects_another_hubs_sidecar_without_changing_config(
     with pytest.raises(ValueError, match="different hub"):
         bridge.connect(target)
     assert bridge.target() is None
+
+
+def test_remote_clones_share_a_notes_fingerprint(
+    hub_repo: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    clone = tmp_path / "second-clone"
+    subprocess.run(["git", "clone", str(hub_repo.parent / "origin.git"), str(clone)], check=True)
+    first = Hub(hub_repo, profile="default")
+    second = Hub(clone, profile="other")
+    assert hub_fingerprint(first.root) == hub_fingerprint(second.root)
+    target = tmp_path / "vault"
+    _connected(first, target)
+    assert NotesBridge(second)._sidecar(target)["hub_fingerprint"] == hub_fingerprint(second.root)
+
+
+def test_connect_rolls_back_profile_config_when_initial_render_fails(
+    local_hub: Path, fake_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable(_: NotesBridge) -> None:
+        raise OSError("disk")
+
+    bridge = NotesBridge(Hub(local_hub, profile="default"))
+    monkeypatch.setattr(NotesBridge, "render_all", unavailable)
+    with pytest.raises(OSError, match="disk"):
+        bridge.connect(tmp_path / "vault")
+    assert not config_path(fake_home).exists()
+
+
+def test_scalar_custom_tag_is_preserved_when_agops_tag_is_added(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "plans" / "shared-plan.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace("tags:\n- agops", "tags: work"),
+        encoding="utf-8",
+    )
+    bridge.render_all(force=True)
+    assert "tags:\n- work\n- agops" in note.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("broken", "reason"),
+    [
+        (lambda text: text.replace("---\n", "---\n[broken\n", 1), "Invalid frontmatter"),
+        (lambda text: text.replace("<!-- agops:personal:start -->", ""), "personal-notes"),
+    ],
+)
+def test_bad_note_wrappers_are_preserved_and_reported_as_warnings(
+    local_hub: Path,
+    plan_file: Path,
+    fake_home: Path,
+    tmp_path: Path,
+    broken,
+    reason: str,
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "plans" / "shared-plan.md"
+    note.write_text(broken(note.read_text(encoding="utf-8")), encoding="utf-8")
+    before = note.read_bytes()
+    current = load_plan(local_hub, "shared-plan")
+    current["goal"] = "A hub-side update."
+    baseline = bridge._sidecar(tmp_path / "vault")["plans"]["shared-plan"]["definition_hash"]
+    event = hub.draft_plan_definition(current, "codex", "two", 1, baseline)
+    assert reason in event["notes_warning"]
+    assert note.read_bytes() == before
 
 
 def test_pending_definition_displays_only_approved_execution_tasks(

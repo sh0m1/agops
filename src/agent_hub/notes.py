@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from .config import load_profiles, save_profiles
+from .config import config_path, load_profiles, save_profiles
 from .git import remote_url
-from .ids import slug
+from .ids import normalize_remote, slug
 from .security import validate_content
 from .state import PlanState, load_plan, load_state, validate_plan
 
@@ -63,7 +63,14 @@ def definition_hash(plan: dict[str, Any]) -> str:
 
 
 def hub_fingerprint(root: Path) -> str:
-    """A local, stable owner marker; a notes folder cannot silently move between hubs."""
+    """A stable, non-secret owner marker shared by clones of the same remote hub."""
+    remote = remote_url(root)
+    identity = f"origin:{normalize_remote(remote)}" if remote else f"local:{root.resolve()}"
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _legacy_root_fingerprint(root: Path) -> str:
+    """Accept sidecars written before remote-aware ownership was introduced."""
     return hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()
 
 
@@ -121,8 +128,10 @@ class NotesBridge:
         # connect transactional and prevents one hub from adopting another hub's notes.
         if (target / SIDECAR).exists():
             self._sidecar(target)
-        target.mkdir(parents=True, exist_ok=True)
         profiles = load_profiles()
+        profile_path = config_path()
+        previous = profile_path.read_bytes() if profile_path.exists() else None
+        target.mkdir(parents=True, exist_ok=True)
         entry = dict(profiles.profiles.get(self.profile, {}))
         entry.update(
             {
@@ -137,7 +146,14 @@ class NotesBridge:
         save_profiles(profiles)
         # Existing managed folders may contain an intentionally edited or malformed note;
         # connecting must not erase it. Missing files still receive the initial export.
-        self.render_all()
+        try:
+            self.render_all()
+        except Exception:
+            if previous is None:
+                profile_path.unlink(missing_ok=True)
+            else:
+                _atomic_write(profile_path, previous.decode("utf-8"))
+            raise
         return {"connected": str(target), "profile": self.profile}
 
     def disconnect(self) -> dict[str, Any]:
@@ -163,7 +179,13 @@ class NotesBridge:
             raise ValueError(f"Invalid {SIDECAR}: {exc}") from exc
         if not isinstance(data, dict) or data.get("format_version") != FORMAT_VERSION:
             raise ValueError(f"Unsupported {SIDECAR} format")
-        if data.get("hub_fingerprint") != hub_fingerprint(self.hub.root):
+        expected = hub_fingerprint(self.hub.root)
+        actual = data.get("hub_fingerprint")
+        if actual == _legacy_root_fingerprint(self.hub.root):
+            # Migration is persisted by the next sidecar write. It is only valid in this exact
+            # clone, unlike a remote-aware fingerprint which travels safely between machines.
+            data["hub_fingerprint"] = expected
+        elif actual != expected:
             raise ValueError(f"{SIDECAR} belongs to a different hub")
         data.setdefault("plans", {})
         return data
@@ -176,15 +198,22 @@ class NotesBridge:
             return {}, ""
         text = path.read_text(encoding="utf-8")
         match = _FRONTMATTER.match(text)
+        if not match:
+            raise ValueError(f"Missing frontmatter in {path}")
         frontmatter: dict[str, Any] = {}
-        if match:
+        try:
             loaded = yaml.safe_load(match.group(1)) or {}
-            if isinstance(loaded, dict):
-                frontmatter = {
-                    key: value for key, value in loaded.items() if not str(key).startswith("agops_")
-                }
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid frontmatter in {path}: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise ValueError(f"Frontmatter in {path} must be a YAML object")
+        frontmatter = {
+            key: value for key, value in loaded.items() if not str(key).startswith("agops_")
+        }
         personal = _PERSONAL.search(text)
-        return frontmatter, personal.group(1).strip("\n") if personal else ""
+        if not personal:
+            raise ValueError(f"Missing personal-notes markers in {path}")
+        return frontmatter, personal.group(1).strip("\n")
 
     def _note_definition(self, path: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")
@@ -212,7 +241,10 @@ class NotesBridge:
     ) -> str:
         custom, personal = self._frontmatter_and_personal(path)
         latest = int(plan["revision"])
-        custom_tags = custom.get("tags", []) if isinstance(custom.get("tags"), list) else []
+        raw_tags = custom.get("tags")
+        custom_tags = (
+            raw_tags if isinstance(raw_tags, list) else ([] if raw_tags is None else [raw_tags])
+        )
         front = {
             **custom,
             "agops_id": plan["id"],

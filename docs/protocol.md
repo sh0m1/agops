@@ -54,9 +54,11 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
   generated state, and an excluded personal-notes region; and
 - `.agops-notes.json`, a format-versioned semantic baseline.
 
-The sidecar includes a fingerprint of its hub. A connect validates that fingerprint before changing
-profile configuration, so a target cannot be adopted by another hub or partially connected on
-failure.
+The sidecar includes a fingerprint of its hub. For a hub with `origin`, this is a hash of the
+normalized remote identity, so separate clones share it; local-only hubs hash their resolved local
+root instead. The raw remote is never placed in the sidecar. A connect validates that fingerprint
+before changing profile configuration, so a target cannot be adopted by another hub or partially
+connected on failure. If its initial render fails, it restores the prior profile config.
 
 Hub state is authoritative. Successful hub mutations and `agops sync` attempt outbound rendering;
 a notes filesystem error is reported by `notes status` and `doctor` but never rolls back a committed

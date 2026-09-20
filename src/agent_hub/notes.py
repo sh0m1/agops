@@ -216,6 +216,8 @@ class NotesBridge:
         return frontmatter, personal.group(1).strip("\n")
 
     def _note_definition(self, path: Path) -> dict[str, Any]:
+        # Imports accept only the full hybrid-note envelope, not an isolated YAML fence.
+        self._frontmatter_and_personal(path)
         text = path.read_text(encoding="utf-8")
         match = _DEFINITION.search(text)
         if not match:
@@ -373,6 +375,7 @@ class NotesBridge:
         sidecar = self._sidecar(target)
         state = load_state(self.hub.root)
         written: list[str] = []
+        warnings: list[str] = []
         for summary in self.hub.list_plans():
             plan_id = summary["id"]
             if plan_ids is not None and plan_id not in plan_ids:
@@ -395,7 +398,8 @@ class NotesBridge:
                     note_changed = baseline.get("definition_hash") != note_hash
                     if not note_changed or note_hash == hub_hash:
                         should_write = True
-                except ValueError:
+                except ValueError as exc:
+                    warnings.append(f"{plan_id}: {exc}")
                     should_write = False
             if should_write:
                 _atomic_write(path, self._render_plan(plan, plan_state, path, execution_plan))
@@ -407,7 +411,7 @@ class NotesBridge:
                 }
         _atomic_write(target / "Plans.md", self._index(self.hub.list_plans()))
         self._write_sidecar(target, sidecar)
-        return {"connected": True, "written": written}
+        return {"connected": True, "written": written, "warnings": warnings}
 
     def sync(self, actor: str, session: str) -> dict[str, Any]:
         target = self.target()
@@ -419,6 +423,7 @@ class NotesBridge:
         state = load_state(self.hub.root)
         imported: list[str] = []
         conflicts: list[str] = []
+        invalid: list[dict[str, str]] = []
         for summary in self.hub.list_plans():
             plan_id = summary["id"]
             plan_state = state.plans.get(plan_id, PlanState(plan_id))
@@ -433,7 +438,8 @@ class NotesBridge:
                 continue
             try:
                 note = self._note_definition(path)
-            except ValueError:
+            except ValueError as exc:
+                invalid.append({"id": plan_id, "error": str(exc)})
                 continue
             current = load_plan(self.hub.root, plan_id)
             note_hash, current_hash = definition_hash(note), definition_hash(current)
@@ -449,7 +455,7 @@ class NotesBridge:
         # Do not overwrite a concurrent edit: normal rendering refreshes hub-only changes,
         # imports, and missing notes while preserving invalid/edited/conflicting files.
         refreshed = self.render_all()
-        return {"imported": imported, "conflicts": conflicts, **refreshed}
+        return {"imported": imported, "conflicts": conflicts, "invalid": invalid, **refreshed}
 
     def resolve(self, plan_id: str, take: str, actor: str, session: str) -> dict[str, Any]:
         if take not in {"notes", "agops"}:

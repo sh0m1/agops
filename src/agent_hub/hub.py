@@ -101,26 +101,33 @@ class Hub:
                 self._write_event(event)
                 if commit_and_push(self.root, message):
                     # A notes outage must never turn a published hub event into a failure.
-                    self._refresh_notes()
+                    warning = self._refresh_notes()
+                    if warning:
+                        event["notes_warning"] = warning
                     return event
                 recover_after_rejected_push(self.root)
                 last_error = GitError("Remote changed during operation")
                 time.sleep(0.05)
         raise GitError(f"Could not publish operation after five retries: {last_error}")
 
-    def sync(self) -> None:
+    def sync(self) -> dict[str, Any]:
         with repository_lock(self.root):
             assert_clean(self.root)
             sync_from_remote(self.root)
         self.flush_outbox()
-        self._refresh_notes()
+        warning = self._refresh_notes()
+        result: dict[str, Any] = {"ok": True}
+        if warning:
+            result["notes_warning"] = warning
+        return result
 
-    def _refresh_notes(self) -> None:
+    def _refresh_notes(self) -> str | None:
         try:
             NotesBridge(self).render_all()
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
             # `notes status`/`doctor` exposes the stale target; the next hub sync retries.
-            return
+            return f"Notes refresh failed: {exc}"
+        return None
 
     def draft_plan_definition(
         self,

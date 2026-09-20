@@ -62,6 +62,11 @@ def definition_hash(plan: dict[str, Any]) -> str:
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
+def hub_fingerprint(root: Path) -> str:
+    """A local, stable owner marker; a notes folder cannot silently move between hubs."""
+    return hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()
+
+
 def _state_hash(state: PlanState) -> str:
     payload = {
         "approved_revision": state.approved_revision,
@@ -112,6 +117,10 @@ class NotesBridge:
             raise ValueError(f"Notes target is not a directory: {target}")
         if target.exists() and any(target.iterdir()) and not (target / SIDECAR).exists():
             raise ValueError("Notes target must be new, empty, or already managed by agops")
+        # Validate a managed target before changing profile configuration.  This makes a failed
+        # connect transactional and prevents one hub from adopting another hub's notes.
+        if (target / SIDECAR).exists():
+            self._sidecar(target)
         target.mkdir(parents=True, exist_ok=True)
         profiles = load_profiles()
         entry = dict(profiles.profiles.get(self.profile, {}))
@@ -143,13 +152,19 @@ class NotesBridge:
     def _sidecar(self, target: Path) -> dict[str, Any]:
         path = target / SIDECAR
         if not path.exists():
-            return {"format_version": FORMAT_VERSION, "plans": {}}
+            return {
+                "format_version": FORMAT_VERSION,
+                "hub_fingerprint": hub_fingerprint(self.hub.root),
+                "plans": {},
+            }
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid {SIDECAR}: {exc}") from exc
         if not isinstance(data, dict) or data.get("format_version") != FORMAT_VERSION:
             raise ValueError(f"Unsupported {SIDECAR} format")
+        if data.get("hub_fingerprint") != hub_fingerprint(self.hub.root):
+            raise ValueError(f"{SIDECAR} belongs to a different hub")
         data.setdefault("plans", {})
         return data
 
@@ -188,7 +203,13 @@ class NotesBridge:
             raise ValueError(f"Plan ID in {path} must match its filename")
         return data
 
-    def _render_plan(self, plan: dict[str, Any], state: PlanState, path: Path) -> str:
+    def _render_plan(
+        self,
+        plan: dict[str, Any],
+        state: PlanState,
+        path: Path,
+        execution_plan: dict[str, Any] | None = None,
+    ) -> str:
         custom, personal = self._frontmatter_and_personal(path)
         latest = int(plan["revision"])
         custom_tags = custom.get("tags", []) if isinstance(custom.get("tags"), list) else []
@@ -214,8 +235,18 @@ class NotesBridge:
         ]
         if plan.get("goal"):
             lines.extend(["", "## Goal", "", str(plan["goal"])])
-        lines.extend(["", "## Tasks", ""])
-        for task in plan["tasks"]:
+        execution_plan = execution_plan or plan
+        pending = state.approved_revision and latest > state.approved_revision
+        heading = "## Execution tasks"
+        if pending:
+            heading += f" (approved revision {state.approved_revision})"
+        lines.extend(["", heading, ""])
+        if pending:
+            lines.append(
+                f"_Revision {latest} is pending approval; its new tasks are not executable._"
+            )
+            lines.append("")
+        for task in execution_plan["tasks"]:
             current = state.tasks.get(task["id"])
             state_text = current.status if current else "ready"
             owner = f" — {current.owner}" if current and current.owner else ""
@@ -299,7 +330,9 @@ class NotesBridge:
         overall = "clean" if all(item["status"] == "clean" for item in output) else "attention"
         return {"connected": True, "target": str(target), "status": overall, "plans": output}
 
-    def render_all(self, force: bool = False) -> dict[str, Any]:
+    def render_all(
+        self, force: bool = False, plan_ids: set[str] | None = None
+    ) -> dict[str, Any]:
         target = self.target()
         if target is None:
             return {"connected": False}
@@ -310,8 +343,13 @@ class NotesBridge:
         written: list[str] = []
         for summary in self.hub.list_plans():
             plan_id = summary["id"]
+            if plan_ids is not None and plan_id not in plan_ids:
+                continue
             plan = load_plan(self.hub.root, plan_id)
             plan_state = state.plans.get(plan_id, PlanState(plan_id))
+            execution_plan = plan
+            if plan_state.active and plan_state.approved_revision:
+                execution_plan = load_plan(self.hub.root, plan_id, plan_state.approved_revision)
             path = target / "plans" / f"{plan_id}.md"
             hub_hash = definition_hash(plan)
             baseline = sidecar["plans"].get(plan_id, {})
@@ -328,19 +366,13 @@ class NotesBridge:
                 except ValueError:
                     should_write = False
             if should_write:
-                _atomic_write(path, self._render_plan(plan, plan_state, path))
+                _atomic_write(path, self._render_plan(plan, plan_state, path, execution_plan))
                 written.append(plan_id)
                 sidecar["plans"][plan_id] = {
                     "definition_hash": hub_hash,
                     "state_hash": _state_hash(plan_state),
                     "revision": int(plan["revision"]),
                 }
-            elif note is not None and note_changed:
-                # Keep a pending user definition intact while task state keeps flowing out.
-                note["revision"] = plan["revision"]
-                _atomic_write(path, self._render_plan(note, plan_state, path))
-                written.append(plan_id)
-                sidecar["plans"].setdefault(plan_id, {})["state_hash"] = _state_hash(plan_state)
         _atomic_write(target / "Plans.md", self._index(self.hub.list_plans()))
         self._write_sidecar(target, sidecar)
         return {"connected": True, "written": written}
@@ -400,8 +432,14 @@ class NotesBridge:
         if take == "notes":
             note = self._note_definition(path)
             current = load_plan(self.hub.root, plan_id)
+            state = load_state(self.hub.root).plans.get(plan_id, PlanState(plan_id))
+            if _status(state) in {"completed", "cancelled"}:
+                raise ValueError(f"Cannot import notes for {_status(state)} plan: {plan_id}")
+            if definition_hash(note) == definition_hash(current):
+                return {"resolved": plan_id, "take": take, "imported": False}
             self.hub.draft_plan_definition(
                 note, actor, session, int(current["revision"]), definition_hash(current)
             )
-        self.render_all(force=True)
-        return {"resolved": plan_id, "take": take}
+        # Resolution is deliberately scoped: unrelated edited/conflicting files are untouchable.
+        self.render_all(force=True, plan_ids={plan_id})
+        return {"resolved": plan_id, "take": take, "imported": take == "notes"}

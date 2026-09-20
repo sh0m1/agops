@@ -193,6 +193,11 @@ or cancelled plans are history only. If agops and a note changed the same defini
 deliberately: `agops notes resolve PLAN --take notes|agops` (type the plan id, or add `--yes`).
 `agops notes disconnect` only forgets the folder; it never deletes notes.
 
+The sidecar is bound to its hub, so a folder belonging to another profile cannot be connected by
+mistake. A notes write failure is an additive `notes_warning`: the hub event still succeeds and the
+next sync retries it. When a newer revision is awaiting approval, the note clearly separates that
+definition from the executable tasks of the approved revision.
+
 ## Tool access order
 
 The managed instruction block tells agents to try a CLI or MCP tool first for any external system,

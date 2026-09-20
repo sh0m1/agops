@@ -54,9 +54,13 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
   generated state, and an excluded personal-notes region; and
 - `.agops-notes.json`, a format-versioned semantic baseline.
 
+The sidecar includes a fingerprint of its hub. A connect validates that fingerprint before changing
+profile configuration, so a target cannot be adopted by another hub or partially connected on
+failure.
+
 Hub state is authoritative. Successful hub mutations and `agops sync` attempt outbound rendering;
 a notes filesystem error is reported by `notes status` and `doctor` but never rolls back a committed
-event. Automatic rendering never imports a file. `agops notes sync` alone imports a valid edited
+event; the successful command result includes an additive `notes_warning`. Automatic rendering never imports a file. `agops notes sync` alone imports a valid edited
 definition for a draft or active plan, producing the next immutable, unapproved revision. It does
 not import personal notes, custom frontmatter, task state, evidence, claims, or approvals.
 
@@ -66,7 +70,13 @@ semantic changes are left untouched and reported as conflicts. Import performs a
 compare-and-swap while holding the hub repository lock. Resolve a conflict with `agops notes
 resolve PLAN --take notes|agops`; this requires typing the plan id unless `--yes` is supplied.
 Taking notes creates an unapproved revision; taking agops replaces only managed content and keeps
-personal notes/custom properties. Completed and cancelled plans are read-only note history.
+personal notes/custom properties. A clean notes choice is a no-op and notes cannot be taken for a
+completed or cancelled plan. Resolution rendering is scoped to the selected note, so unrelated
+dirty notes are never overwritten. Completed and cancelled plans are read-only note history.
+
+When the latest revision is pending approval, its full YAML remains visible for review, but the
+generated execution-task section is rendered from the approved revision and labels the pending
+definition. Unapproved tasks therefore never appear executable.
 
 ## Generic agent contract
 

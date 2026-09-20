@@ -63,7 +63,7 @@ def test_setup_remembers_remote_on_second_run(
     assert second["remote"] == bare_remote
     assert config.read_text(encoding="utf-8") == saved
     data = json.loads(saved)
-    assert data["schema_version"] == 2 and data["default"] == "default"
+    assert data["schema_version"] == 3 and data["default"] == "default"
     assert data["profiles"] == {"default": {"repo": str(runtime.resolve()), "remote": bare_remote}}
 
 

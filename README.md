@@ -175,6 +175,24 @@ agops plan draft plan.yaml
 agops plan approve my-plan
 ```
 
+## Notes apps (Obsidian, Logseq, or any Markdown folder)
+
+Connect one dedicated folder to a hub profile. The folder contains ordinary portable Markdown, so
+Obsidian discovers it immediately and another notes app can use it too:
+
+```sh
+agops notes connect ~/Notes/agops
+agops notes status
+agops notes sync
+```
+
+Agops exports after successful hub changes and after `agops sync`. Editing a plan note is safe but
+intentional: `agops notes sync` validates the fenced YAML and creates a new **unapproved** plan
+revision. Personal notes and non-`agops_*` frontmatter are retained and never imported. Finished
+or cancelled plans are history only. If agops and a note changed the same definition, resolve it
+deliberately: `agops notes resolve PLAN --take notes|agops` (type the plan id, or add `--yes`).
+`agops notes disconnect` only forgets the folder; it never deletes notes.
+
 ## Tool access order
 
 The managed instruction block tells agents to try a CLI or MCP tool first for any external system,

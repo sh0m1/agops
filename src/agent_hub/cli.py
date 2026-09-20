@@ -14,6 +14,7 @@ from .adapters import install_adapters
 from .config import load_profiles, resolve_repo, save_profiles
 from .health import INFORMATIONAL, doctor
 from .hub import Hub, read_frontmatter
+from .notes import NotesBridge
 from .policy import PolicyError, policy_path
 from .sessions import record_session, resolve_model
 from .setup import setup
@@ -47,6 +48,17 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("sync")
     commands.add_parser("doctor")
     commands.add_parser("scan")
+    notes = commands.add_parser("notes")
+    notes_commands = notes.add_subparsers(dest="notes_command", required=True)
+    notes_connect = notes_commands.add_parser("connect")
+    notes_connect.add_argument("target")
+    notes_commands.add_parser("status")
+    notes_commands.add_parser("sync")
+    notes_resolve = notes_commands.add_parser("resolve")
+    notes_resolve.add_argument("plan_id")
+    notes_resolve.add_argument("--take", required=True, choices=("notes", "agops"))
+    notes_resolve.add_argument("--yes", action="store_true")
+    notes_commands.add_parser("disconnect")
     session_parser = commands.add_parser("session")
     session_parser.add_argument("--actor", default="agent")
     session_parser.add_argument("--value", action="store_true")
@@ -239,6 +251,20 @@ def dispatch(args: argparse.Namespace) -> Any:
         return doctor(hub)
     if args.command == "scan":
         return hub.scan()
+    if args.command == "notes":
+        bridge = NotesBridge(hub)
+        if args.notes_command == "connect":
+            return bridge.connect(Path(args.target))
+        if args.notes_command == "status":
+            return bridge.status()
+        if args.notes_command == "disconnect":
+            return bridge.disconnect()
+        actor, session = actor_session(args)
+        if args.notes_command == "sync":
+            hub.sync()
+            return bridge.sync(actor, session)
+        require_human_confirmation(args.plan_id, args.yes, "resolve", noun="plan")
+        return bridge.resolve(args.plan_id, args.take, actor, session)
     if args.command == "brief":
         return hub.brief(
             Path(args.cwd),

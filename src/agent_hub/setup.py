@@ -57,7 +57,7 @@ enough.
 PREFERENCE_HEADING = "## Standing preferences"
 
 
-def render_instructions(hub: "Hub | None") -> str:
+def render_instructions(hub: Hub | None) -> str:
     """INSTRUCTIONS plus the hub's active global preferences.
 
     The instruction files are generated from the hub, so a preference is recorded once with
@@ -169,7 +169,11 @@ def setup(
     hub = Hub(runtime, profile=name)
     policy = "created" if hub.ensure_policy() else "already-present"
 
-    profiles.profiles[name] = {"repo": str(runtime), "remote": remote}
+    profiles.profiles[name] = {
+        "repo": str(runtime),
+        "remote": remote,
+        **({"notes_target": entry["notes_target"]} if entry.get("notes_target") else {}),
+    }
     if make_default or not profiles.default:
         profiles.default = name
     save_profiles(profiles, home)

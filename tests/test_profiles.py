@@ -85,7 +85,7 @@ def test_legacy_config_migrates_in_place(isolated: Path, tmp_path: Path, recordi
     summary = _setup(isolated, runner)
     assert summary["profile"] == "default" and summary["default_profile"] == "default"
     data = json.loads(path.read_text())
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert data["profiles"]["default"]["repo"] == str(runtime.resolve())
     assert (runtime / "memory" / "policy" / "tiers.yaml").exists()
 

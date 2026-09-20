@@ -60,7 +60,7 @@ def test_profile_runtime_paths(fake_home: Path) -> None:
         profile_runtime("../evil", fake_home)
 
 
-def test_save_and_reload_v2(fake_home: Path) -> None:
+def test_save_and_reload_v3(fake_home: Path) -> None:
     profiles = Profiles(
         default="team",
         profiles={
@@ -70,7 +70,7 @@ def test_save_and_reload_v2(fake_home: Path) -> None:
     )
     save_profiles(profiles, fake_home)
     data = json.loads(config_path(fake_home).read_text())
-    assert data["schema_version"] == 2 and data["default"] == "team"
+    assert data["schema_version"] == 3 and data["default"] == "team"
     assert load_profiles(fake_home) == profiles
 
 

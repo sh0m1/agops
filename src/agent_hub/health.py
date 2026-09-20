@@ -17,7 +17,7 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 # Keys in a doctor report that describe state rather than pass/fail checks.
 INFORMATIONAL = frozenset(
-    {"root", "queued_checkpoints", "policy", "remote", "profile", "mcp_pinned", "ok"}
+    {"root", "queued_checkpoints", "policy", "remote", "profile", "mcp_pinned", "ok", "notes"}
 )
 _PINNED_ASSIGNMENT = re.compile(r"^\s*AGENT_HUB_REPO\s*=")
 
@@ -48,6 +48,12 @@ def doctor(
     checks["claude_instructions"] = (home / ".claude" / "CLAUDE.md").exists()
     checks["remote"] = remote_url(hub.root)
     checks["mcp_pinned"] = pinned_mcp_registrations(home, which=which, runner=runner)
+    try:
+        from .notes import NotesBridge
+
+        checks["notes"] = NotesBridge(hub).status()
+    except (OSError, ValueError) as exc:
+        checks["notes"] = {"status": "invalid", "error": str(exc)}
     checks["ok"] = all(
         value for key, value in checks.items() if key not in INFORMATIONAL
     ) and not str(checks["policy"]).startswith("invalid")

@@ -65,6 +65,9 @@ a notes filesystem error is reported by `notes status` and `doctor` but never ro
 event; the successful command result includes an additive `notes_warning`. Automatic rendering never imports a file. `agops notes sync` alone imports a valid edited
 definition for a draft or active plan, producing the next immutable, unapproved revision. It does
 not import personal notes, custom frontmatter, task state, evidence, claims, or approvals.
+Import validation covers the whole hybrid note: frontmatter must be a mapping and personal-notes
+markers must be present as well as the fenced YAML being valid. Invalid notes are left untouched,
+reported by plan id and error in `notes sync`, and never draft a revision.
 
 Definitions are compared as canonical YAML rather than raw text. Formatting-only edits are clean;
 hub-only changes refresh the note; note-only changes are imported on explicit sync; concurrent

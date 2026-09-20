@@ -123,10 +123,13 @@ class Hub:
 
     def _refresh_notes(self) -> str | None:
         try:
-            NotesBridge(self).render_all()
+            result = NotesBridge(self).render_all()
         except (OSError, ValueError) as exc:
             # `notes status`/`doctor` exposes the stale target; the next hub sync retries.
             return f"Notes refresh failed: {exc}"
+        warnings = result.get("warnings", [])
+        if warnings:
+            return "Notes refresh failed: " + "; ".join(warnings)
         return None
 
     def draft_plan_definition(

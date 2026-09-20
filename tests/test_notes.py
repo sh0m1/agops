@@ -103,6 +103,27 @@ def test_invalid_note_is_left_untouched_and_disconnect_keeps_files(
     assert note.exists()
 
 
+def test_sync_rejects_an_edited_definition_with_missing_personal_marker(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "plans" / "shared-plan.md"
+    note.write_text(
+        note.read_text(encoding="utf-8")
+        .replace("Let agents cooperate.", "This edit must not import.")
+        .replace("<!-- agops:personal:start -->", ""),
+        encoding="utf-8",
+    )
+
+    result = bridge.sync("human", "terminal")
+    assert result["imported"] == []
+    assert [item["id"] for item in result["invalid"]] == ["shared-plan"]
+    assert "personal-notes" in result["invalid"][0]["error"]
+    assert load_plan(local_hub, "shared-plan")["revision"] == 1
+
+
 def test_connect_rejects_unmanaged_nonempty_directory(
     local_hub: Path, fake_home: Path, tmp_path: Path
 ) -> None:

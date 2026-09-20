@@ -44,6 +44,30 @@ without pinning a hub, and for Codex forwards the `AGENT_HUB_*` variables throug
 the launching terminal's choice reaches agent sessions. Profiles are fully separate: a session
 reads and writes only its own hub.
 
+## Markdown notes bridge
+
+Each configured profile may have one absolute `notes_target` in config schema version 3. `agops
+notes connect TARGET` accepts only a new, empty, or already agops-managed directory and writes:
+
+- `Plans.md`, an index grouped by draft, active, completed, and cancelled plans;
+- `plans/<plan-id>.md`, containing portable frontmatter, an editable fenced YAML definition,
+  generated state, and an excluded personal-notes region; and
+- `.agops-notes.json`, a format-versioned semantic baseline.
+
+Hub state is authoritative. Successful hub mutations and `agops sync` attempt outbound rendering;
+a notes filesystem error is reported by `notes status` and `doctor` but never rolls back a committed
+event. Automatic rendering never imports a file. `agops notes sync` alone imports a valid edited
+definition for a draft or active plan, producing the next immutable, unapproved revision. It does
+not import personal notes, custom frontmatter, task state, evidence, claims, or approvals.
+
+Definitions are compared as canonical YAML rather than raw text. Formatting-only edits are clean;
+hub-only changes refresh the note; note-only changes are imported on explicit sync; concurrent
+semantic changes are left untouched and reported as conflicts. Import performs a revision and hash
+compare-and-swap while holding the hub repository lock. Resolve a conflict with `agops notes
+resolve PLAN --take notes|agops`; this requires typing the plan id unless `--yes` is supplied.
+Taking notes creates an unapproved revision; taking agops replaces only managed content and keeps
+personal notes/custom properties. Completed and cancelled plans are read-only note history.
+
 ## Generic agent contract
 
 1. Call `agent-hub brief --cwd "$PWD" --json` at session start. Keep the same

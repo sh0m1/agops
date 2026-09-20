@@ -13,7 +13,7 @@ from .sessions import default_home
 
 PROFILE_ENV = "AGENT_HUB_PROFILE"
 REPO_ENV = "AGENT_HUB_REPO"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
@@ -43,7 +43,7 @@ def load_profiles(home: Path | None = None) -> Profiles:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         return Profiles(None, {})
-    if data.get("schema_version") == SCHEMA_VERSION:
+    if data.get("schema_version") in {2, SCHEMA_VERSION}:
         raw = data.get("profiles") or {}
         profiles = {
             str(name): dict(entry) for name, entry in raw.items() if isinstance(entry, dict)

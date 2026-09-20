@@ -21,6 +21,7 @@ from .git import (
     sync_from_remote,
 )
 from .ids import event_id, normalize_remote, project_id_from_remote, slug
+from .notes import NotesBridge, definition_hash
 from .policy import (
     DEFAULT_POLICY_TEXT,
     POLICY_RELATIVE_PATH,
@@ -99,6 +100,8 @@ class Hub:
                 event, message = operation(state)
                 self._write_event(event)
                 if commit_and_push(self.root, message):
+                    # A notes outage must never turn a published hub event into a failure.
+                    self._refresh_notes()
                     return event
                 recover_after_rejected_push(self.root)
                 last_error = GitError("Remote changed during operation")
@@ -110,6 +113,54 @@ class Hub:
             assert_clean(self.root)
             sync_from_remote(self.root)
         self.flush_outbox()
+        self._refresh_notes()
+
+    def _refresh_notes(self) -> None:
+        try:
+            NotesBridge(self).render_all()
+        except (OSError, ValueError):
+            # `notes status`/`doctor` exposes the stale target; the next hub sync retries.
+            return
+
+    def draft_plan_definition(
+        self,
+        definition: dict[str, Any],
+        actor: str,
+        session: str,
+        expected_revision: int,
+        expected_hash: str,
+    ) -> dict[str, Any]:
+        """Create an unapproved revision after a notes-side compare-and-swap check."""
+        validate_plan(definition, self.policy())
+        plan_id = slug(str(definition["id"]))
+
+        def operation(_: State) -> tuple[dict[str, Any], str]:
+            current = load_plan(self.root, plan_id)
+            if (
+                int(current["revision"]) != expected_revision
+                or definition_hash(current) != expected_hash
+            ):
+                raise ValueError(f"Plan changed while importing notes: {plan_id}")
+            revisions = self.root / "memory" / "plans" / plan_id / "revisions"
+            revision = expected_revision + 1
+            imported = dict(definition)
+            imported.update({
+                "id": plan_id,
+                "revision": revision,
+                "created_at": timestamp(),
+                "created_by": actor,
+            })
+            target = revisions / f"{revision:04d}.yaml"
+            target.write_text(
+                yaml.safe_dump(imported, sort_keys=False, allow_unicode=True), encoding="utf-8"
+            )
+            event = self._base_event("plan_drafted", actor, session)
+            event.update(
+                {"plan_id": plan_id, "payload": {"revision": revision, "imported": "notes"}}
+            )
+            return event, f"hub: import notes revision {plan_id} revision {revision}"
+
+        return self._mutate(operation)
 
     def scan(self) -> dict[str, int]:
         memory = self.root / "memory"

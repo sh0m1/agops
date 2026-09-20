@@ -242,8 +242,7 @@ def dispatch(args: argparse.Namespace) -> Any:
         return {"written": install_adapters(Path(args.path), tools)}
     hub = Hub.from_environment(args.repo)
     if args.command == "sync":
-        hub.sync()
-        return {"ok": True}
+        return hub.sync()
     if args.command == "session":
         session = str(uuid.uuid4())
         return session if args.value else {"actor": args.actor, "session": session}
@@ -261,8 +260,11 @@ def dispatch(args: argparse.Namespace) -> Any:
             return bridge.disconnect()
         actor, session = actor_session(args)
         if args.notes_command == "sync":
-            hub.sync()
-            return bridge.sync(actor, session)
+            sync_result = hub.sync()
+            result = bridge.sync(actor, session)
+            if "notes_warning" in sync_result:
+                result["notes_warning"] = sync_result["notes_warning"]
+            return result
         require_human_confirmation(args.plan_id, args.yes, "resolve", noun="plan")
         return bridge.resolve(args.plan_id, args.take, actor, session)
     if args.command == "brief":

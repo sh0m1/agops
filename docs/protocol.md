@@ -52,7 +52,17 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
 - `Plans.md`, an index grouped by draft, active, completed, and cancelled plans;
 - `plans/<plan-id>.md`, containing portable frontmatter, an editable fenced YAML definition,
   generated state, and an excluded personal-notes region; and
+- `knowledge/<scope-path>/<key>.md`, one note per active knowledge entry;
+- `Knowledge.md`, `Projects.md`, and `Activity.md`, generated indexes of the knowledge
+  entries, the registered projects grouped by workspace, and the current claims, blockers,
+  and ready tasks; and
 - `.agops-notes.json`, a format-versioned semantic baseline.
+
+Knowledge, project, and activity files are a one-way mirror: the hub is the only writer and
+`notes sync` never imports them, so a knowledge note is corrected with `agops knowledge add`.
+Their personal-notes region is still preserved across renders. A retired or superseded entry
+leaves the mirror on the next render; if its note carries personal notes the file is kept and
+reported as a warning instead of deleted.
 
 The sidecar includes a fingerprint of its hub. For a hub with `origin`, this is a hash of the
 normalized remote identity, so separate clones share it; local-only hubs hash their resolved local

@@ -5,10 +5,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import project as make_project
 
 from agent_hub.config import config_path
 from agent_hub.hub import Hub
-from agent_hub.notes import NotesBridge, hub_fingerprint
+from agent_hub.notes import PERSONAL_START, NotesBridge, hub_fingerprint
 from agent_hub.state import load_plan
 
 
@@ -302,3 +303,96 @@ def test_hub_returns_notes_warnings_after_a_durable_event(
     assert event["notes_warning"] == "Notes refresh failed: disk"
     assert load_plan(local_hub, "shared-plan")["revision"] == 1
     assert hub.sync()["notes_warning"] == "Notes refresh failed: disk"
+
+
+def test_knowledge_projects_and_activity_are_mirrored(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.add_knowledge(
+        "global", "testing", "Testing", "Always keep concrete evidence.", "codex", "one"
+    )
+    hub.add_knowledge(
+        "project:acme-widgets", "deploys", "Deploys", "Deploy from main only.", "codex", "one"
+    )
+    hub.register_project(make_project(tmp_path / "widgets"))
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+
+    note = vault / "knowledge" / "global" / "testing.md"
+    text = note.read_text(encoding="utf-8")
+    assert "agops_scope: global" in text
+    assert "Always keep concrete evidence." in text
+    assert PERSONAL_START in text
+    assert (vault / "knowledge" / "project" / "acme-widgets" / "deploys.md").exists()
+    index = (vault / "Knowledge.md").read_text(encoding="utf-8")
+    assert "[Testing](knowledge/global/testing.md)" in index
+    assert "## project:acme-widgets" in index
+    projects = (vault / "Projects.md").read_text(encoding="utf-8")
+    assert "`acme-widgets`" in projects
+    assert "# Activity" in (vault / "Activity.md").read_text(encoding="utf-8")
+    assert bridge.status()["mirrored"] == {"knowledge": 2, "projects": 1}
+
+
+def test_activity_shows_claims_and_blocked_tasks(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    worktree = make_project(tmp_path / "widgets")
+    hub.register_project(worktree)
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.approve_plan("shared-plan")
+    _connected(hub, tmp_path / "vault")
+    hub.claim_task("shared-plan", "first", "codex", "session-one", worktree)
+    activity = (tmp_path / "vault" / "Activity.md").read_text(encoding="utf-8")
+    assert "`shared-plan` / `first`" in activity
+    assert "owner codex" in activity
+    assert "`second`" not in activity  # blocked behind its dependency, so not ready yet
+
+    hub.block_task("shared-plan", "first", "codex", "session-one", "Waiting on access.")
+    activity = (tmp_path / "vault" / "Activity.md").read_text(encoding="utf-8")
+    assert "Waiting on access." in activity
+
+
+def test_retired_knowledge_leaves_the_mirror_but_personal_notes_survive(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.add_knowledge("global", "kept", "Kept", "Body one.", "codex", "one")
+    hub.add_knowledge("global", "dropped", "Dropped", "Body two.", "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    kept = tmp_path / "vault" / "knowledge" / "global" / "kept.md"
+    kept.write_text(
+        kept.read_text(encoding="utf-8").replace(
+            PERSONAL_START, f"{PERSONAL_START}\nMy own annotation."
+        ),
+        encoding="utf-8",
+    )
+
+    hub.retire_knowledge("global", "kept", "Obsolete.", "codex", "two")
+    hub.retire_knowledge("global", "dropped", "Obsolete.", "codex", "two")
+    result = bridge.render_all()
+    assert not (tmp_path / "vault" / "knowledge" / "global" / "dropped.md").exists()
+    assert "My own annotation." in kept.read_text(encoding="utf-8")
+    assert any("kept.md" in warning for warning in result["warnings"])
+    assert result["mirrored"]["knowledge"] == 0
+
+
+def test_mirrored_knowledge_note_edits_are_not_imported(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.add_knowledge("global", "testing", "Testing", "Original body.", "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "knowledge" / "global" / "testing.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace("Original body.", "Rewritten by hand."),
+        encoding="utf-8",
+    )
+
+    bridge.sync("codex", "two")
+    assert "Original body." in note.read_text(encoding="utf-8")
+    assert "Rewritten by hand." not in note.read_text(encoding="utf-8")
+    entry = next((local_hub / "memory" / "knowledge" / "global" / "testing").glob("*.md"))
+    assert "Original body." in entry.read_text(encoding="utf-8")

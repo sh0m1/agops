@@ -93,6 +93,19 @@ def _state_hash(state: PlanState) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+    """Read an agops memory file: a YAML mapping, then the body.  Malformed files yield {}."""
+    match = _FRONTMATTER.match(text)
+    if not match:
+        return {}, text.strip()
+    try:
+        loaded = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return {}, text[match.end() :].strip()
+    metadata = loaded if isinstance(loaded, dict) else {}
+    return metadata, text[match.end() :].strip()
+
+
 def _status(state: PlanState) -> str:
     if state.active:
         return "active"
@@ -317,6 +330,211 @@ class NotesBridge:
             lines.append("")
         return "\n".join(lines)
 
+    # --- Read-only mirrors: knowledge, projects, and current agent activity -------------
+    #
+    # Unlike plan notes, these are never imported.  Agops owns everything but the
+    # personal-notes region of a knowledge note, so a hub change always wins here.
+
+    def _knowledge_entries(self) -> list[dict[str, Any]]:
+        """The current revision of every active knowledge entry, newest scope order first."""
+        root = self.hub.root / "memory" / "knowledge"
+        if not root.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for directory in sorted(path for path in root.rglob("*") if path.is_dir()):
+            revisions = sorted(directory.glob("*.md"))
+            if not revisions:
+                continue
+            path = revisions[-1]
+            metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+            if metadata.get("status", "active") != "active":
+                continue
+            scope_path = directory.parent.relative_to(root).as_posix()
+            key = str(metadata.get("key") or directory.name)
+            entries.append(
+                {
+                    "id": metadata.get("id"),
+                    "key": key,
+                    "title": str(metadata.get("title") or key),
+                    "scope": str(metadata.get("scope") or scope_path.replace("/", ":")),
+                    "scope_path": scope_path,
+                    "kind": str(metadata.get("kind", "fact")),
+                    "created_at": metadata.get("created_at"),
+                    "created_by": metadata.get("created_by"),
+                    "revisions": len(revisions),
+                    "body": body,
+                    "relative": f"knowledge/{scope_path}/{key}.md",
+                }
+            )
+        return sorted(entries, key=lambda entry: (entry["scope"], entry["key"]))
+
+    def _render_knowledge(self, entry: dict[str, Any], path: Path) -> str:
+        custom, personal = self._frontmatter_and_personal(path)
+        raw_tags = custom.get("tags")
+        custom_tags = (
+            raw_tags if isinstance(raw_tags, list) else ([] if raw_tags is None else [raw_tags])
+        )
+        front = {
+            **custom,
+            "agops_knowledge_id": entry["id"],
+            "agops_key": entry["key"],
+            "agops_scope": entry["scope"],
+            "agops_kind": entry["kind"],
+            "agops_revisions": entry["revisions"],
+            "agops_created_at": entry["created_at"],
+            "agops_created_by": entry["created_by"],
+            "tags": list(dict.fromkeys([*custom_tags, "agops", "agops/knowledge"])),
+        }
+        managed = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).rstrip()
+        lines = [
+            "---", managed, "---", "", f"# {entry['title']}", "",
+            f"_Mirrored from the agops hub ({entry['scope']} · {entry['kind']}). "
+            "Edits outside the personal-notes region are overwritten; use "
+            "`agops knowledge add` to change the entry._", "",
+            entry["body"] or "_No body._",
+            "", "## Personal notes", "", PERSONAL_START,
+        ]
+        if personal:
+            lines.append(personal)
+        lines.extend([PERSONAL_END, ""])
+        return "\n".join(lines)
+
+    def _knowledge_index(self, entries: list[dict[str, Any]]) -> str:
+        if not entries:
+            return "\n".join(["# Knowledge", "", "_None._", ""])
+        scopes: dict[str, list[dict[str, Any]]] = {}
+        for entry in entries:
+            scopes.setdefault(entry["scope"], []).append(entry)
+        lines = ["# Knowledge", "", f"_{len(entries)} active entries._"]
+        for scope, group in scopes.items():
+            lines.extend(["", f"## {scope}", ""])
+            for entry in group:
+                lines.append(f"- [{entry['title']}]({entry['relative']}) · {entry['kind']}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def _projects(self) -> list[dict[str, Any]]:
+        root = self.hub.root / "memory" / "projects"
+        if not root.exists():
+            return []
+        projects: list[dict[str, Any]] = []
+        for path in sorted(root.glob("*.yaml")):
+            try:
+                definition = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                continue
+            if not isinstance(definition, dict):
+                continue
+            projects.append(
+                {
+                    "id": str(definition.get("id") or path.stem),
+                    "remote": definition.get("remote"),
+                    "workspace": definition.get("workspace"),
+                    "registered_at": definition.get("registered_at"),
+                }
+            )
+        return sorted(projects, key=lambda item: (str(item["workspace"] or ""), item["id"]))
+
+    def _projects_index(self, projects: list[dict[str, Any]]) -> str:
+        if not projects:
+            return "\n".join(["# Projects", "", "_None._", ""])
+        workspaces: dict[str, list[dict[str, Any]]] = {}
+        for project in projects:
+            workspaces.setdefault(str(project["workspace"] or "unassigned"), []).append(project)
+        lines = ["# Projects", "", f"_{len(projects)} registered repositories._"]
+        for workspace, group in workspaces.items():
+            lines.extend(["", f"## {workspace}", ""])
+            for project in group:
+                remote = f" — {project['remote']}" if project.get("remote") else ""
+                lines.append(f"- `{project['id']}`{remote}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def _activity(self) -> str:
+        """What the agents are doing right now: live claims, blockers, and what is next."""
+        state = load_state(self.hub.root)
+        claimed: list[str] = []
+        blocked: list[str] = []
+        for summary in self.hub.list_plans():
+            plan_id = summary["id"]
+            plan_state = state.plans.get(plan_id)
+            if plan_state is None:
+                continue
+            for task_id, task in sorted(plan_state.tasks.items()):
+                label = f"- `{plan_id}` / `{task_id}`"
+                if task.status == "claimed":
+                    live = "active" if task.actively_claimed() else "lease expired"
+                    detail = [f"owner {task.owner or 'unknown'}", live]
+                    if task.model:
+                        detail.append(f"model {task.model}")
+                    if task.tier:
+                        detail.append(f"tier {task.tier}")
+                    if task.lease_until:
+                        detail.append(f"lease until {task.lease_until}")
+                    claimed.append(f"{label} — " + " · ".join(detail))
+                    if task.summary:
+                        claimed.append(f"  - Latest: {task.summary}")
+                    if task.evidence:
+                        claimed.append("  - Evidence: " + "; ".join(task.evidence))
+                elif task.status == "blocked":
+                    blocked.append(f"{label} — {task.reason or 'no reason recorded'}")
+        lines = ["# Activity", "", "## Claimed tasks", ""]
+        lines.extend(claimed or ["_None._"])
+        lines.extend(["", "## Blocked tasks", ""])
+        lines.extend(blocked or ["_None._"])
+        lines.extend(["", "## Ready next", ""])
+        ready = self.hub.ready_tasks()
+        if not ready:
+            lines.append("_None._")
+        for task in ready:
+            lines.append(
+                f"- `{task['plan_id']}` / `{task['id']}` — {task['title']}"
+                + (f" · tier {task['tier']}" if task.get("tier") else "")
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+    def _mirror(self, target: Path, sidecar: dict[str, Any]) -> tuple[dict[str, int], list[str]]:
+        """Refresh the knowledge notes and the generated project/activity indexes."""
+        warnings: list[str] = []
+        entries = self._knowledge_entries()
+        known: dict[str, Any] = sidecar.setdefault("knowledge", {})
+        seen: set[str] = set()
+        written = 0
+        for entry in entries:
+            relative = entry["relative"]
+            seen.add(relative)
+            path = target / relative
+            try:
+                rendered = self._render_knowledge(entry, path)
+            except ValueError as exc:
+                warnings.append(f"knowledge {entry['scope']}/{entry['key']}: {exc}")
+                continue
+            if not path.exists() or path.read_text(encoding="utf-8") != rendered:
+                _atomic_write(path, rendered)
+                written += 1
+            known[relative] = {"id": entry["id"], "revisions": entry["revisions"]}
+        # A retired or superseded entry leaves the mirror. Personal notes are never discarded:
+        # such a note is kept in place and reported instead.
+        for relative in sorted(set(known) - seen):
+            path = target / relative
+            if path.exists():
+                try:
+                    _, personal = self._frontmatter_and_personal(path)
+                except ValueError as exc:
+                    warnings.append(f"{relative}: {exc}")
+                    continue
+                if personal:
+                    warnings.append(f"{relative}: entry retired; note kept for its personal notes")
+                    continue
+                path.unlink()
+            known.pop(relative, None)
+        projects = self._projects()
+        _atomic_write(target / "Knowledge.md", self._knowledge_index(entries))
+        _atomic_write(target / "Projects.md", self._projects_index(projects))
+        _atomic_write(target / "Activity.md", self._activity())
+        return {"knowledge": len(entries), "projects": len(projects), "written": written}, warnings
+
     def status(self) -> dict[str, Any]:
         target = self.target()
         if target is None:
@@ -362,7 +580,16 @@ class NotesBridge:
                     value = "clean"
             output.append({"id": plan_id, "status": value, "plan_status": _status(plan_state)})
         overall = "clean" if all(item["status"] == "clean" for item in output) else "attention"
-        return {"connected": True, "target": str(target), "status": overall, "plans": output}
+        return {
+            "connected": True,
+            "target": str(target),
+            "status": overall,
+            "plans": output,
+            "mirrored": {
+                "knowledge": len(self._knowledge_entries()),
+                "projects": len(self._projects()),
+            },
+        }
 
     def render_all(
         self, force: bool = False, plan_ids: set[str] | None = None
@@ -410,8 +637,15 @@ class NotesBridge:
                     "revision": int(plan["revision"]),
                 }
         _atomic_write(target / "Plans.md", self._index(self.hub.list_plans()))
+        mirrored, mirror_warnings = self._mirror(target, sidecar)
+        warnings.extend(mirror_warnings)
         self._write_sidecar(target, sidecar)
-        return {"connected": True, "written": written, "warnings": warnings}
+        return {
+            "connected": True,
+            "written": written,
+            "warnings": warnings,
+            "mirrored": mirrored,
+        }
 
     def sync(self, actor: str, session: str) -> dict[str, Any]:
         target = self.target()

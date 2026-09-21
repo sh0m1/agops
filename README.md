@@ -186,6 +186,13 @@ agops notes status
 agops notes sync
 ```
 
+The folder holds the whole working picture: `Plans.md` and `plans/<id>.md` for the plans,
+`knowledge/<scope>/<key>.md` with a `Knowledge.md` index for the knowledge entries, `Projects.md`
+for the registered repositories by workspace, and `Activity.md` for who has claimed what, what is
+blocked, and what is ready next. Only plan notes are two-way; knowledge, projects, and activity are
+a read-only mirror of the hub, so change knowledge with `agops knowledge add` rather than in the
+vault. Personal notes are preserved in every note.
+
 Agops exports after successful hub changes and after `agops sync`. Editing a plan note is safe but
 intentional: `agops notes sync` validates the fenced YAML and creates a new **unapproved** plan
 revision. Personal notes and non-`agops_*` frontmatter are retained and never imported. Finished

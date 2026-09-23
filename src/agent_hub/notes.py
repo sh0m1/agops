@@ -304,14 +304,25 @@ def plan_project_ids(execution_plan: dict[str, Any]) -> list[str]:
     return sorted(ids)
 
 
+def project_workspace(project_id: str, projects: list[dict[str, Any]]) -> str | None:
+    """A project's workspace; an unregistered sub-project inherits its registered parent's.
+
+    Plans often name `quinceai-stack-backend` while only `quinceai-stack` is registered.
+    """
+    workspace_by_project = {str(item["id"]): item.get("workspace") for item in projects}
+    if workspace_by_project.get(project_id):
+        return workspace_by_project[project_id]
+    parents = [pid for pid in workspace_by_project if project_id.startswith(pid + "-")]
+    return workspace_by_project[max(parents, key=len)] if parents else None
+
+
 def plan_workspace(execution_plan: dict[str, Any], projects: list[dict[str, Any]]) -> str:
     """The workspace(s) a plan touches, derived from its scope and its tasks' projects."""
-    workspace_by_project = {str(item["id"]): item.get("workspace") for item in projects}
     workspaces = sorted(
         {
-            workspace_by_project[pid]
+            workspace
             for pid in plan_project_ids(execution_plan)
-            if workspace_by_project.get(pid)
+            if (workspace := project_workspace(pid, projects))
         }
     )
     if not workspaces:
@@ -329,8 +340,7 @@ def _knowledge_workspace(scope: str, projects: list[dict[str, Any]]) -> str:
     kind, identifier = scope.split(":", 1)
     if kind != "project":
         return identifier
-    workspace_by_project = {str(item["id"]): item.get("workspace") for item in projects}
-    return workspace_by_project.get(identifier) or identifier
+    return project_workspace(identifier, projects) or identifier
 
 
 def link_plan(entry: dict[str, Any], plans: list[str]) -> str | None:

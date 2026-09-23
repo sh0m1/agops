@@ -11,6 +11,7 @@ import json
 import os
 import re
 import tempfile
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,7 +21,7 @@ from .config import config_path, load_profiles, save_profiles
 from .git import remote_url
 from .ids import normalize_remote, slug
 from .security import validate_content
-from .state import PlanState, load_plan, load_state, validate_plan
+from .state import PlanState, State, load_plan, load_state, parse_time, utc_now, validate_plan
 
 if TYPE_CHECKING:
     from .hub import Hub
@@ -31,6 +32,124 @@ PERSONAL_START = "<!-- agops:personal:start -->"
 PERSONAL_END = "<!-- agops:personal:end -->"
 DEFINITION_START = "<!-- agops:definition:start -->"
 DEFINITION_END = "<!-- agops:definition:end -->"
+STALE_DAYS = 7
+RETIRE_MIN_AGE_DAYS = 3
+AGOPS_BASE = """\
+formulas:
+  idle: 'today() - agops_last_activity'
+properties:
+  agops_title:
+    displayName: Plan
+  agops_workspace:
+    displayName: Workspace
+  agops_health:
+    displayName: Health
+  agops_last_activity:
+    displayName: Last activity
+  formula.idle:
+    displayName: Idle
+views:
+  - type: table
+    name: Active plans
+    filters:
+      and:
+        - file.hasProperty("agops_id")
+        - 'agops_status == "active"'
+    order:
+      - file.name
+      - agops_title
+      - agops_workspace
+      - agops_health
+      - agops_last_activity
+      - formula.idle
+      - agops_tasks_open
+      - agops_tasks_blocked
+    sort:
+      - property: agops_last_activity
+        direction: DESC
+  - type: table
+    name: Stalled
+    filters:
+      and:
+        - file.hasProperty("agops_id")
+        - 'agops_status == "active"'
+        - or:
+            - 'agops_health == "stalled"'
+            - 'agops_health == "blocked"'
+    order:
+      - file.name
+      - agops_title
+      - agops_workspace
+      - agops_health
+      - agops_last_activity
+      - formula.idle
+      - agops_tasks_open
+      - agops_tasks_blocked
+    sort:
+      - property: agops_last_activity
+        direction: ASC
+  - type: table
+    name: By workspace
+    filters:
+      and:
+        - file.hasProperty("agops_id")
+        - 'agops_status == "active"'
+    order:
+      - file.name
+      - agops_title
+      - agops_workspace
+      - agops_health
+      - agops_last_activity
+      - formula.idle
+      - agops_tasks_open
+      - agops_tasks_blocked
+    groupBy:
+      property: agops_workspace
+      direction: ASC
+  - type: table
+    name: Recently completed
+    filters:
+      and:
+        - file.hasProperty("agops_id")
+        - 'agops_status == "completed"'
+        - 'agops_completed > today() - "14d"'
+    order:
+      - file.name
+      - agops_title
+      - agops_workspace
+      - agops_completed
+    sort:
+      - property: agops_completed
+        direction: DESC
+  - type: table
+    name: Knowledge
+    filters:
+      and:
+        - file.hasProperty("agops_knowledge_id")
+    order:
+      - file.name
+      - agops_kind
+      - agops_plan
+      - agops_plan_status
+      - agops_created_at
+    groupBy:
+      property: agops_workspace
+      direction: ASC
+  - type: table
+    name: Retire candidates
+    filters:
+      and:
+        - file.hasProperty("agops_knowledge_id")
+        - 'agops_kind == "fact"'
+        - or:
+            - 'agops_plan_status == "completed"'
+            - 'agops_plan_status == "cancelled"'
+    order:
+      - file.name
+      - agops_plan
+      - agops_plan_status
+      - agops_created_at
+"""
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _DEFINITION = re.compile(
     re.escape(DEFINITION_START) + r"\s*```ya?ml\n(.*?)```\s*" + re.escape(DEFINITION_END),
@@ -39,6 +158,8 @@ _DEFINITION = re.compile(
 _PERSONAL = re.compile(
     re.escape(PERSONAL_START) + r"\n?(.*?)" + re.escape(PERSONAL_END), re.DOTALL
 )
+_KEY_DATE_SUFFIX = re.compile(r"-(?:\d{4}-\d{2}-\d{2}|\d{8})$")
+_ID_DATE_SUFFIX = re.compile(r"-\d{8}$")
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -114,6 +235,182 @@ def _status(state: PlanState) -> str:
     if state.cancelled:
         return "cancelled"
     return "draft"
+
+
+def idle_days(last_event_at: str | None, now: datetime | None = None) -> int | None:
+    """Whole days since the plan's last event, or None if it never had one."""
+    if not last_event_at:
+        return None
+    return ((now or utc_now()) - parse_time(last_event_at)).days
+
+
+def _date_only(value: str | None) -> date | None:
+    return parse_time(value).date() if value else None
+
+
+def plan_task_counts(
+    plan_state: PlanState, execution_plan: dict[str, Any], now: datetime | None = None
+) -> dict[str, int]:
+    """total/done/open/blocked/claimed counts over an execution plan's tasks."""
+    now = now or utc_now()
+    tasks = execution_plan.get("tasks", [])
+    done = blocked = claimed = 0
+    for task in tasks:
+        task_state = plan_state.tasks.get(task["id"])
+        status = task_state.status if task_state else "ready"
+        if status == "completed":
+            done += 1
+        elif status == "blocked":
+            blocked += 1
+        if task_state and task_state.actively_claimed(now):
+            claimed += 1
+    total = len(tasks)
+    return {
+        "total": total,
+        "done": done,
+        "open": total - done,
+        "blocked": blocked,
+        "claimed": claimed,
+    }
+
+
+def plan_health(
+    plan_state: PlanState, execution_plan: dict[str, Any], now: datetime | None = None
+) -> str:
+    now = now or utc_now()
+    if plan_state.completed:
+        return "done"
+    if plan_state.cancelled:
+        return "cancelled"
+    if not plan_state.approved_revision:
+        return "draft"
+    if any(task.actively_claimed(now) for task in plan_state.tasks.values()):
+        return "live"
+    counts = plan_task_counts(plan_state, execution_plan, now)
+    if counts["open"] and counts["open"] == counts["blocked"]:
+        return "blocked"
+    if plan_state.last_event_at and (idle_days(plan_state.last_event_at, now) or 0) >= STALE_DAYS:
+        return "stalled"
+    return "waiting"
+
+
+def plan_project_ids(execution_plan: dict[str, Any]) -> list[str]:
+    """Every project a plan touches: its declared scope plus each task's project."""
+    scope = execution_plan.get("scope") or {}
+    ids = {str(item) for item in (scope.get("projects") or [])}
+    ids.update(
+        str(task["project"]) for task in execution_plan.get("tasks", []) if task.get("project")
+    )
+    return sorted(ids)
+
+
+def plan_workspace(execution_plan: dict[str, Any], projects: list[dict[str, Any]]) -> str:
+    """The workspace(s) a plan touches, derived from its scope and its tasks' projects."""
+    workspace_by_project = {str(item["id"]): item.get("workspace") for item in projects}
+    workspaces = sorted(
+        {
+            workspace_by_project[pid]
+            for pid in plan_project_ids(execution_plan)
+            if workspace_by_project.get(pid)
+        }
+    )
+    if not workspaces:
+        return str(execution_plan["id"]).split("-", 1)[0]
+    if len(workspaces) == 1:
+        return workspaces[0]
+    return ", ".join(workspaces)
+
+
+def _knowledge_workspace(scope: str, projects: list[dict[str, Any]]) -> str:
+    if scope == "global":
+        return "global"
+    if ":" not in scope:
+        return scope
+    kind, identifier = scope.split(":", 1)
+    if kind != "project":
+        return identifier
+    workspace_by_project = {str(item["id"]): item.get("workspace") for item in projects}
+    return workspace_by_project.get(identifier) or identifier
+
+
+def link_plan(entry: dict[str, Any], plans: list[str]) -> str | None:
+    """The plan a knowledge entry belongs to: by id mention first, else by key."""
+    haystack = f"{entry.get('title') or ''}\n{entry.get('body') or ''}"
+    direct = [plan_id for plan_id in plans if plan_id in haystack]
+    if direct:
+        return max(direct, key=len)
+    key = _KEY_DATE_SUFFIX.sub("", str(entry.get("key") or ""))
+    best_plan: str | None = None
+    best_len = -1
+    for plan_id in plans:
+        core = plan_id.split("-", 1)[1] if "-" in plan_id else plan_id
+        core = _ID_DATE_SUFFIX.sub("", core)
+        if not core:
+            continue
+        if (key == core or key.startswith(core + "-")) and len(core) > best_len:
+            best_plan, best_len = plan_id, len(core)
+    return best_plan
+
+
+def _knowledge_verdict(
+    entry: dict[str, Any],
+    plan_id: str | None,
+    plan_status: str | None,
+    has_personal_notes: bool,
+    age_days: int | None,
+) -> tuple[str, str | None]:
+    """Whether a knowledge entry can be retired, and why."""
+    if entry["kind"] != "fact":
+        return "keep", None
+    if plan_id and plan_status in {"completed", "cancelled"}:
+        old_enough = age_days is not None and age_days >= RETIRE_MIN_AGE_DAYS
+        if not has_personal_notes and old_enough:
+            return "retire_safe", f"progress log of {plan_status} plan {plan_id}"
+        return "review", None
+    if plan_id:
+        return "keep", None
+    if _KEY_DATE_SUFFIX.search(str(entry.get("key") or "")):
+        return "review", None
+    return "keep", None
+
+
+def _plan_overview(
+    plan: dict[str, Any],
+    plan_state: PlanState,
+    execution_plan: dict[str, Any],
+    projects: list[dict[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    """Everything Plans.md, Home.md, frontmatter, and `notes review` need about one plan."""
+    counts = plan_task_counts(plan_state, execution_plan, now)
+    blocked = [
+        {"task": task["id"], "reason": plan_state.tasks[task["id"]].reason or ""}
+        for task in execution_plan.get("tasks", [])
+        if plan_state.tasks.get(task["id"]) and plan_state.tasks[task["id"]].status == "blocked"
+    ]
+    latest = int(plan["revision"])
+    return {
+        "id": plan["id"],
+        "title": plan["title"],
+        "status": _status(plan_state),
+        "health": plan_health(plan_state, execution_plan, now),
+        "workspace": plan_workspace(execution_plan, projects),
+        "projects": plan_project_ids(execution_plan),
+        "latest_revision": latest,
+        "first_event_at": plan_state.first_event_at,
+        "last_event_at": plan_state.last_event_at,
+        "completed_at": plan_state.completed_at,
+        "cancelled_at": plan_state.cancelled_at,
+        "idle_days": idle_days(plan_state.last_event_at, now),
+        "tasks_total": counts["total"],
+        "tasks_done": counts["done"],
+        "tasks_open": counts["open"],
+        "tasks_blocked": counts["blocked"],
+        "blocked": blocked,
+        "pending_approval": bool(
+            plan_state.approved_revision and latest > plan_state.approved_revision
+        ),
+    }
 
 
 class NotesBridge:
@@ -252,7 +549,8 @@ class NotesBridge:
         plan: dict[str, Any],
         state: PlanState,
         path: Path,
-        execution_plan: dict[str, Any] | None = None,
+        execution_plan: dict[str, Any],
+        overview: dict[str, Any],
     ) -> str:
         custom, personal = self._frontmatter_and_personal(path)
         latest = int(plan["revision"])
@@ -269,8 +567,29 @@ class NotesBridge:
             "agops_pending_approval": bool(
                 state.approved_revision and latest > state.approved_revision
             ),
-            "tags": list(dict.fromkeys([*custom_tags, "agops"])),
+            "agops_title": plan["title"],
+            "agops_workspace": overview["workspace"],
+            "agops_projects": overview["projects"],
+            "agops_health": overview["health"],
         }
+        created = _date_only(state.first_event_at)
+        if created is not None:
+            front["agops_created"] = created
+        last_activity = _date_only(state.last_event_at)
+        if last_activity is not None:
+            front["agops_last_activity"] = last_activity
+        completed = _date_only(state.completed_at)
+        if completed is not None:
+            front["agops_completed"] = completed
+        front.update(
+            {
+                "agops_tasks": overview["tasks_total"],
+                "agops_tasks_done": overview["tasks_done"],
+                "agops_tasks_open": overview["tasks_open"],
+                "agops_tasks_blocked": overview["tasks_blocked"],
+                "tags": list(dict.fromkeys([*custom_tags, "agops"])),
+            }
+        )
         managed = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).rstrip()
         definition = yaml.safe_dump(_definition(plan), sort_keys=False, allow_unicode=True).rstrip()
         lines = [
@@ -282,7 +601,6 @@ class NotesBridge:
         ]
         if plan.get("goal"):
             lines.extend(["", "## Goal", "", str(plan["goal"])])
-        execution_plan = execution_plan or plan
         pending = state.approved_revision and latest > state.approved_revision
         heading = "## Execution tasks"
         if pending:
@@ -315,20 +633,152 @@ class NotesBridge:
         lines.extend([PERSONAL_END, ""])
         return "\n".join(lines)
 
-    def _index(self, summaries: list[dict[str, Any]]) -> str:
-        groups = {"draft": [], "active": [], "completed": [], "cancelled": []}
-        for item in summaries:
+    def _index(self, overviews: list[dict[str, Any]]) -> str:
+        groups: dict[str, list[dict[str, Any]]] = {
+            "draft": [], "active": [], "completed": [], "cancelled": []
+        }
+        for item in overviews:
             groups[item["status"]].append(item)
-        lines = ["# Plans", ""]
-        for status in ("draft", "active", "completed", "cancelled"):
-            lines.extend([f"## {status.title()}", ""])
-            if not groups[status]:
-                lines.append("_None._")
-            for plan in groups[status]:
-                pending = " · pending approval" if plan["pending_revision"] else ""
-                lines.append(f"- [{plan['title']}](plans/{plan['id']}.md){pending}")
-            lines.append("")
+        lines = ["# Plans", "", "## Draft", ""]
+        if not groups["draft"]:
+            lines.append("_None._")
+        for plan in groups["draft"]:
+            lines.append(f"- [{plan['title']}](plans/{plan['id']}.md)")
+        lines.extend(["", "## Active", ""])
+        if not groups["active"]:
+            lines.append("_None._")
+        else:
+            by_workspace: dict[str, list[dict[str, Any]]] = {}
+            for plan in groups["active"]:
+                by_workspace.setdefault(plan["workspace"], []).append(plan)
+            for workspace in sorted(by_workspace):
+                lines.extend([f"### {workspace}", ""])
+                ordered = sorted(
+                    by_workspace[workspace],
+                    key=lambda plan: plan["last_event_at"] or "",
+                    reverse=True,
+                )
+                for plan in ordered:
+                    pending = " · pending approval" if plan["pending_approval"] else ""
+                    last = _date_only(plan["last_event_at"])
+                    last_text = f" · last {last.isoformat()}" if last else ""
+                    idle = plan["idle_days"]
+                    idle_text = f" · {idle}d idle" if idle is not None else ""
+                    lines.append(
+                        f"- [{plan['title']}](plans/{plan['id']}.md) · {plan['health']}"
+                        f"{last_text}{idle_text}{pending}"
+                    )
+                lines.append("")
+        lines.extend(["## Completed", ""])
+        completed = sorted(
+            groups["completed"], key=lambda plan: plan["completed_at"] or "", reverse=True
+        )
+        if not completed:
+            lines.append("_None._")
+        for plan in completed:
+            date = _date_only(plan["completed_at"])
+            suffix = f" · completed {date.isoformat()}" if date else ""
+            lines.append(f"- [{plan['title']}](plans/{plan['id']}.md){suffix}")
+        lines.extend(["", "## Cancelled", ""])
+        cancelled = sorted(
+            groups["cancelled"], key=lambda plan: plan["cancelled_at"] or "", reverse=True
+        )
+        if not cancelled:
+            lines.append("_None._")
+        for plan in cancelled:
+            date = _date_only(plan["cancelled_at"])
+            suffix = f" · cancelled {date.isoformat()}" if date else ""
+            lines.append(f"- [{plan['title']}](plans/{plan['id']}.md){suffix}")
+        lines.append("")
         return "\n".join(lines)
+
+    def _home(self, overviews: list[dict[str, Any]], now: datetime) -> str:
+        active = [item for item in overviews if item["status"] == "active"]
+        live = sum(1 for item in active if item["health"] == "live")
+        stalled = sum(1 for item in active if item["health"] == "stalled")
+        blocked_tasks = sum(item["tasks_blocked"] for item in active)
+        ready = len(self.hub.ready_tasks())
+        lines = [
+            "# agops home",
+            "",
+            f"_As of {now.strftime('%Y-%m-%d %H:%M')} UTC · {len(active)} active · {live} live · "
+            f"{stalled} stalled · {blocked_tasks} blocked tasks · {ready} ready tasks_",
+            "",
+            "## Needs you",
+            "",
+        ]
+        needs: list[str] = []
+        for plan in active:
+            if plan["pending_approval"]:
+                needs.append(
+                    f"- Pending approval: [{plan['title']}](plans/{plan['id']}.md) · "
+                    f"revision {plan['latest_revision']}"
+                )
+        for plan in active:
+            for item in plan["blocked"]:
+                reason = item["reason"]
+                if len(reason) > 160:
+                    reason = reason[:159].rstrip() + "…"
+                needs.append(
+                    f"- Blocked: [{plan['title']}](plans/{plan['id']}.md) / "
+                    f"`{item['task']}` — {reason}"
+                )
+        lines.extend(needs or ["_Nothing._"])
+        lines.extend(
+            [
+                "",
+                "## Active plans",
+                "",
+                "| Plan | Workspace | Health | Last activity | Idle | Open | Blocked |",
+                "|---|---|---|---|---|---|---|",
+            ]
+        )
+        for plan in sorted(active, key=lambda item: item["last_event_at"] or "", reverse=True):
+            title = plan["title"].replace("|", "\\|")
+            last = _date_only(plan["last_event_at"])
+            idle = plan["idle_days"]
+            lines.append(
+                f"| [{title}](plans/{plan['id']}.md) | {plan['workspace']} | {plan['health']} | "
+                f"{last.isoformat() if last else ''} | {f'{idle}d' if idle is not None else ''} | "
+                f"{plan['tasks_open']} | {plan['tasks_blocked']} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Views",
+                "",
+                "![[agops.base#Active plans]]",
+                "",
+                "## Recently completed (14 days)",
+                "",
+            ]
+        )
+        cutoff = now - timedelta(days=14)
+        recent = [
+            item
+            for item in overviews
+            if item["status"] == "completed"
+            and item["completed_at"]
+            and parse_time(item["completed_at"]) >= cutoff
+        ]
+        recent.sort(key=lambda item: item["completed_at"], reverse=True)
+        if recent:
+            for plan in recent:
+                date = _date_only(plan["completed_at"])
+                lines.append(f"- [{plan['title']}](plans/{plan['id']}.md) · {date.isoformat()}")
+        else:
+            lines.append("_None._")
+        lines.extend(
+            ["", "## Indexes", "", "[[Plans]] · [[Knowledge]] · [[Activity]] · [[Projects]]", ""]
+        )
+        return "\n".join(lines)
+
+    def _ensure_base(self, target: Path) -> None:
+        """Write the Obsidian Bases file once; never overwrite a user's customized copy."""
+        path = target / "agops.base"
+        if path.exists():
+            return
+        _atomic_write(path, AGOPS_BASE)
 
     # --- Read-only mirrors: knowledge, projects, and current agent activity -------------
     #
@@ -368,7 +818,14 @@ class NotesBridge:
             )
         return sorted(entries, key=lambda entry: (entry["scope"], entry["key"]))
 
-    def _render_knowledge(self, entry: dict[str, Any], path: Path) -> str:
+    def _render_knowledge(
+        self,
+        entry: dict[str, Any],
+        path: Path,
+        projects: list[dict[str, Any]],
+        plan_id: str | None,
+        plan_status: str | None,
+    ) -> str:
         custom, personal = self._frontmatter_and_personal(path)
         raw_tags = custom.get("tags")
         custom_tags = (
@@ -379,21 +836,28 @@ class NotesBridge:
             "agops_knowledge_id": entry["id"],
             "agops_key": entry["key"],
             "agops_scope": entry["scope"],
+            "agops_workspace": _knowledge_workspace(entry["scope"], projects),
             "agops_kind": entry["kind"],
             "agops_revisions": entry["revisions"],
             "agops_created_at": entry["created_at"],
             "agops_created_by": entry["created_by"],
-            "tags": list(dict.fromkeys([*custom_tags, "agops", "agops/knowledge"])),
         }
+        if plan_id:
+            front["agops_plan"] = plan_id
+            front["agops_plan_status"] = plan_status
+        front["tags"] = list(dict.fromkeys([*custom_tags, "agops", "agops/knowledge"]))
         managed = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).rstrip()
         lines = [
             "---", managed, "---", "", f"# {entry['title']}", "",
             f"_Mirrored from the agops hub ({entry['scope']} · {entry['kind']}). "
             "Edits outside the personal-notes region are overwritten; use "
-            "`agops knowledge add` to change the entry._", "",
-            entry["body"] or "_No body._",
-            "", "## Personal notes", "", PERSONAL_START,
+            "`agops knowledge add` to change the entry._",
         ]
+        if plan_id:
+            lines.append(f"_Plan: [[{plan_id}]] ({plan_status})_")
+        lines.extend(
+            ["", entry["body"] or "_No body._", "", "## Personal notes", "", PERSONAL_START]
+        )
         if personal:
             lines.append(personal)
         lines.extend([PERSONAL_END, ""])
@@ -494,10 +958,14 @@ class NotesBridge:
         lines.append("")
         return "\n".join(lines)
 
-    def _mirror(self, target: Path, sidecar: dict[str, Any]) -> tuple[dict[str, int], list[str]]:
+    def _mirror(
+        self, target: Path, sidecar: dict[str, Any], state: State
+    ) -> tuple[dict[str, int], list[str]]:
         """Refresh the knowledge notes and the generated project/activity indexes."""
         warnings: list[str] = []
         entries = self._knowledge_entries()
+        projects = self._projects()
+        plan_ids = list(state.plans)
         known: dict[str, Any] = sidecar.setdefault("knowledge", {})
         seen: set[str] = set()
         written = 0
@@ -505,8 +973,10 @@ class NotesBridge:
             relative = entry["relative"]
             seen.add(relative)
             path = target / relative
+            plan_id = link_plan(entry, plan_ids)
+            plan_status = _status(state.plans[plan_id]) if plan_id else None
             try:
-                rendered = self._render_knowledge(entry, path)
+                rendered = self._render_knowledge(entry, path, projects, plan_id, plan_status)
             except ValueError as exc:
                 warnings.append(f"knowledge {entry['scope']}/{entry['key']}: {exc}")
                 continue
@@ -529,7 +999,6 @@ class NotesBridge:
                     continue
                 path.unlink()
             known.pop(relative, None)
-        projects = self._projects()
         _atomic_write(target / "Knowledge.md", self._knowledge_index(entries))
         _atomic_write(target / "Projects.md", self._projects_index(projects))
         _atomic_write(target / "Activity.md", self._activity())
@@ -601,17 +1070,22 @@ class NotesBridge:
             raise ValueError(f"Notes target is unavailable: {target}")
         sidecar = self._sidecar(target)
         state = load_state(self.hub.root)
+        now = utc_now()
+        projects = self._projects()
         written: list[str] = []
         warnings: list[str] = []
+        overviews: list[dict[str, Any]] = []
         for summary in self.hub.list_plans():
             plan_id = summary["id"]
-            if plan_ids is not None and plan_id not in plan_ids:
-                continue
             plan = load_plan(self.hub.root, plan_id)
             plan_state = state.plans.get(plan_id, PlanState(plan_id))
             execution_plan = plan
             if plan_state.active and plan_state.approved_revision:
                 execution_plan = load_plan(self.hub.root, plan_id, plan_state.approved_revision)
+            overview = _plan_overview(plan, plan_state, execution_plan, projects, now)
+            overviews.append(overview)
+            if plan_ids is not None and plan_id not in plan_ids:
+                continue
             path = target / "plans" / f"{plan_id}.md"
             hub_hash = definition_hash(plan)
             baseline = sidecar["plans"].get(plan_id, {})
@@ -629,15 +1103,18 @@ class NotesBridge:
                     warnings.append(f"{plan_id}: {exc}")
                     should_write = False
             if should_write:
-                _atomic_write(path, self._render_plan(plan, plan_state, path, execution_plan))
+                rendered = self._render_plan(plan, plan_state, path, execution_plan, overview)
+                _atomic_write(path, rendered)
                 written.append(plan_id)
                 sidecar["plans"][plan_id] = {
                     "definition_hash": hub_hash,
                     "state_hash": _state_hash(plan_state),
                     "revision": int(plan["revision"]),
                 }
-        _atomic_write(target / "Plans.md", self._index(self.hub.list_plans()))
-        mirrored, mirror_warnings = self._mirror(target, sidecar)
+        _atomic_write(target / "Plans.md", self._index(overviews))
+        _atomic_write(target / "Home.md", self._home(overviews, now))
+        self._ensure_base(target)
+        mirrored, mirror_warnings = self._mirror(target, sidecar, state)
         warnings.extend(mirror_warnings)
         self._write_sidecar(target, sidecar)
         return {
@@ -715,3 +1192,97 @@ class NotesBridge:
         # Resolution is deliberately scoped: unrelated edited/conflicting files are untouchable.
         self.render_all(force=True, plan_ids={plan_id})
         return {"resolved": plan_id, "take": take, "imported": take == "notes"}
+
+    def _has_personal_notes(self, target: Path | None, relative: str) -> bool:
+        if target is None:
+            return False
+        path = target / relative
+        if not path.exists():
+            return False
+        try:
+            _, personal = self._frontmatter_and_personal(path)
+        except ValueError:
+            return False
+        return bool(personal)
+
+    def review(self, now: datetime | None = None) -> dict[str, Any]:
+        """A read-only triage report: which plans need attention, which knowledge can retire."""
+        now = now or utc_now()
+        state = load_state(self.hub.root)
+        projects = self._projects()
+        target = self.target()
+        plans_out: list[dict[str, Any]] = []
+        plan_counts = {"active": 0, "live": 0, "stalled": 0, "blocked": 0}
+        for summary in self.hub.list_plans():
+            plan_id = summary["id"]
+            plan = load_plan(self.hub.root, plan_id)
+            plan_state = state.plans.get(plan_id, PlanState(plan_id))
+            status = _status(plan_state)
+            if status in {"completed", "cancelled"}:
+                continue
+            execution_plan = plan
+            if plan_state.active and plan_state.approved_revision:
+                execution_plan = load_plan(self.hub.root, plan_id, plan_state.approved_revision)
+            overview = _plan_overview(plan, plan_state, execution_plan, projects, now)
+            if status == "active":
+                plan_counts["active"] += 1
+                if overview["health"] in plan_counts:
+                    plan_counts[overview["health"]] += 1
+            last_activity_date = _date_only(overview["last_event_at"])
+            plans_out.append(
+                {
+                    "id": plan_id,
+                    "title": plan["title"],
+                    "status": status,
+                    "health": overview["health"],
+                    "workspace": overview["workspace"],
+                    "last_activity": last_activity_date.isoformat() if last_activity_date else None,
+                    "idle_days": overview["idle_days"],
+                    "tasks_open": overview["tasks_open"],
+                    "tasks_blocked": overview["tasks_blocked"],
+                    "blocked": overview["blocked"],
+                    "pending_approval": overview["pending_approval"],
+                }
+            )
+        plan_ids = list(state.plans)
+        knowledge_out: list[dict[str, Any]] = []
+        retire_safe = review_count = 0
+        for entry in self._knowledge_entries():
+            plan_id = link_plan(entry, plan_ids)
+            plan_status = _status(state.plans[plan_id]) if plan_id else None
+            has_personal = self._has_personal_notes(target, entry["relative"])
+            created_at = entry.get("created_at")
+            age_days = (now - parse_time(created_at)).days if created_at else None
+            verdict, reason = _knowledge_verdict(
+                entry, plan_id, plan_status, has_personal, age_days
+            )
+            if verdict == "retire_safe":
+                retire_safe += 1
+            elif verdict == "review":
+                review_count += 1
+            knowledge_out.append(
+                {
+                    "scope": entry["scope"],
+                    "key": entry["key"],
+                    "title": entry["title"],
+                    "kind": entry["kind"],
+                    "created_at": created_at,
+                    "plan": plan_id,
+                    "plan_status": plan_status,
+                    "has_personal_notes": has_personal,
+                    "verdict": verdict,
+                    "reason": reason,
+                }
+            )
+        return {
+            "as_of": now.isoformat().replace("+00:00", "Z"),
+            "stale_days": STALE_DAYS,
+            "counts": {
+                **plan_counts,
+                "knowledge": len(knowledge_out),
+                "retire_safe": retire_safe,
+                "review": review_count,
+            },
+            "plans": plans_out,
+            "knowledge": knowledge_out,
+        }

@@ -205,6 +205,16 @@ mistake. A notes write failure is an additive `notes_warning`: the hub event sti
 next sync retries it. When a newer revision is awaiting approval, the note clearly separates that
 definition from the executable tasks of the approved revision.
 
+`Home.md` is the overview: a one-line tally, what needs you (pending approvals, blocked tasks),
+active plans sorted by last activity, and a link to recently completed work. Every plan note and
+`Plans.md` carry a computed `agops_health` (`live`, `waiting`, `blocked`, `stalled` after 7 idle
+days, `done`, `cancelled`, or `draft`), plus its workspace, projects, and task counts, so the vault
+sorts and filters instead of just listing. `agops.base` is an Obsidian Bases file with ready-made
+views (active, stalled, by workspace, recently completed, knowledge, retire candidates); agops
+writes it once and never overwrites your edits. `agops notes review` prints a read-only JSON triage
+report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
+`agops-notes` skill to act on.
+
 ## Tool access order
 
 The managed instruction block tells agents to try a CLI or MCP tool first for any external system,

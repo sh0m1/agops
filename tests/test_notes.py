@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import yaml
 from conftest import project as make_project
 
 from agent_hub.config import config_path
 from agent_hub.hub import Hub
-from agent_hub.notes import PERSONAL_START, NotesBridge, hub_fingerprint
-from agent_hub.state import load_plan
+from agent_hub.notes import (
+    PERSONAL_START,
+    RETIRE_MIN_AGE_DAYS,
+    NotesBridge,
+    hub_fingerprint,
+    link_plan,
+    plan_health,
+)
+from agent_hub.state import PlanState, TaskState, load_plan
 
 
 def _connected(hub: Hub, target: Path) -> NotesBridge:
@@ -396,3 +405,162 @@ def test_mirrored_knowledge_note_edits_are_not_imported(
     assert "Rewritten by hand." not in note.read_text(encoding="utf-8")
     entry = next((local_hub / "memory" / "knowledge" / "global" / "testing").glob("*.md"))
     assert "Original body." in entry.read_text(encoding="utf-8")
+
+
+def test_plan_frontmatter_has_overview_fields_with_unquoted_dates(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.register_project(make_project(tmp_path / "widgets"), workspace="Acme")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.approve_plan("shared-plan")
+    _connected(hub, tmp_path / "vault")
+    text = (tmp_path / "vault" / "plans" / "shared-plan.md").read_text(encoding="utf-8")
+
+    assert "agops_title: Shared plan" in text
+    assert "agops_workspace: Acme" in text
+    assert "agops_projects:\n- acme-widgets" in text
+    assert "agops_health: waiting" in text
+    assert "agops_tasks: 2" in text
+    assert "agops_tasks_done: 0" in text
+    assert "agops_tasks_open: 2" in text
+    assert "agops_tasks_blocked: 0" in text
+
+    frontmatter = yaml.safe_load(text.split("---", 2)[1])
+    assert isinstance(frontmatter["agops_created"], date)
+    assert isinstance(frontmatter["agops_last_activity"], date)
+    assert "agops_completed" not in frontmatter
+
+
+def test_plan_health_transitions() -> None:
+    execution_plan = {"tasks": [{"id": "only"}]}
+    now = datetime(2026, 9, 23, tzinfo=UTC)
+    recent = now.isoformat().replace("+00:00", "Z")
+
+    draft = PlanState("p")
+    assert plan_health(draft, execution_plan, now) == "draft"
+
+    done = PlanState("p", approved_revision=1, completed=True)
+    assert plan_health(done, execution_plan, now) == "done"
+
+    live = PlanState("p", approved_revision=1, last_event_at=recent)
+    live.tasks["only"] = TaskState(
+        status="claimed", lease_until=(now + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    )
+    assert plan_health(live, execution_plan, now) == "live"
+
+    expired = PlanState("p", approved_revision=1, last_event_at=recent)
+    expired.tasks["only"] = TaskState(
+        status="claimed", lease_until=(now - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
+    )
+    assert plan_health(expired, execution_plan, now) != "live"
+
+    blocked = PlanState("p", approved_revision=1, last_event_at=recent)
+    blocked.tasks["only"] = TaskState(status="blocked")
+    assert plan_health(blocked, execution_plan, now) == "blocked"
+
+    stalled_at = (now - timedelta(days=8)).isoformat().replace("+00:00", "Z")
+    stalled = PlanState("p", approved_revision=1, last_event_at=stalled_at)
+    assert plan_health(stalled, execution_plan, now) == "stalled"
+
+
+def test_link_plan_prefers_direct_mention_then_key_core() -> None:
+    direct = {"title": "Notes for agops-notes-overview", "body": "", "key": "misc"}
+    assert link_plan(direct, ["agops", "agops-notes-overview"]) == "agops-notes-overview"
+
+    by_key = {"title": "Progress", "body": "", "key": "graph-rollout-app-pushed-2026-09-07"}
+    assert link_plan(by_key, ["miningvisuals-graph-rollout"]) == "miningvisuals-graph-rollout"
+
+    unrelated = {"title": "Unrelated", "body": "", "key": "totally-unrelated-thing"}
+    assert link_plan(unrelated, ["agops-notes-overview"]) is None
+
+
+def test_plans_and_home_show_workspace_health_and_activity(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    widgets = make_project(tmp_path / "widgets")
+    hub.register_project(widgets, workspace="Acme")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.approve_plan("shared-plan")
+    _connected(hub, tmp_path / "vault")
+    hub.claim_task("shared-plan", "first", "codex", "session-one", widgets)
+
+    plans_text = (tmp_path / "vault" / "Plans.md").read_text(encoding="utf-8")
+    assert "### Acme" in plans_text
+    assert "· live ·" in plans_text
+
+    home_text = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
+    assert "1 active · 1 live" in home_text
+    assert "[Shared plan](plans/shared-plan.md)" in home_text
+    assert "![[agops.base#Active plans]]" in home_text
+
+
+def test_agops_base_is_written_once_and_left_untouched(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    base_path = tmp_path / "vault" / "agops.base"
+    assert base_path.exists()
+    parsed = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+    assert [view["name"] for view in parsed["views"]] == [
+        "Active plans",
+        "Stalled",
+        "By workspace",
+        "Recently completed",
+        "Knowledge",
+        "Retire candidates",
+    ]
+
+    base_path.write_text("custom: true\n", encoding="utf-8")
+    bridge.render_all(force=True)
+    assert base_path.read_text(encoding="utf-8") == "custom: true\n"
+
+
+def test_notes_review_verdicts(local_hub: Path, fake_home: Path, tmp_path: Path) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.add_knowledge(
+        "global", "team-decision", "Decision", "We chose X.", "codex", "one", kind="decision"
+    )
+
+    plan_yaml = tmp_path / "plan.yaml"
+    plan_yaml.write_text(
+        "id: rollout-demo\n"
+        "title: Rollout demo\n"
+        "goal: Ship it.\n"
+        "tasks:\n"
+        "  - id: only\n"
+        "    title: Only task\n"
+        "    read_only: true\n",
+        encoding="utf-8",
+    )
+    hub.draft_plan(plan_yaml, "codex", "one")
+    hub.approve_plan("rollout-demo")
+    hub.cancel_plan("rollout-demo", "no longer needed")
+    hub.add_knowledge(
+        "global",
+        "progress-note",
+        "Progress",
+        "Pushed the change for rollout-demo, ready for the next step.",
+        "codex",
+        "one",
+        kind="fact",
+    )
+
+    bridge = _connected(hub, tmp_path / "vault")
+    now = datetime.now(UTC) + timedelta(days=RETIRE_MIN_AGE_DAYS)
+    review = bridge.review(now=now)
+    verdicts = {entry["key"]: entry["verdict"] for entry in review["knowledge"]}
+    assert verdicts["team-decision"] == "keep"
+    assert verdicts["progress-note"] == "retire_safe"
+
+    note = tmp_path / "vault" / "knowledge" / "global" / "progress-note.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace(PERSONAL_START, f"{PERSONAL_START}\nKeep this."),
+        encoding="utf-8",
+    )
+    blocked_review = bridge.review(now=now)
+    blocked_verdicts = {entry["key"]: entry["verdict"] for entry in blocked_review["knowledge"]}
+    assert blocked_verdicts["progress-note"] == "review"

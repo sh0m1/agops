@@ -36,7 +36,9 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
 3. **Knowledge, automatic:** retire every entry with `verdict: retire_safe` (a `fact` whose
    plan is completed or cancelled, no personal notes, 3+ days old):
    `agops knowledge retire --scope <scope> --key <key> --reason "<reason from review>" --session <S>`.
-   Never retire `decision`, `preference` or `archive` entries on your own.
+   Never retire `decision`, `preference` or `archive` entries on your own. Skim each title
+   first: if it states a lasting rule or warning ("don't", "always", "must", a standing
+   config fact), treat it as `review` instead.
 4. **Knowledge, ask:** list `verdict: review` entries in one short table. Offer to fold a
    plan's surviving log entries into one `archive` entry (`agops knowledge add --kind
    archive ... `) and retire the originals — only after the user agrees.

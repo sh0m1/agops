@@ -1202,7 +1202,8 @@ class NotesBridge:
         try:
             _, personal = self._frontmatter_and_personal(path)
         except ValueError:
-            return False
+            # An unreadable note may still hold personal notes: never make it retire-safe.
+            return True
         return bool(personal)
 
     def review(self, now: datetime | None = None) -> dict[str, Any]:

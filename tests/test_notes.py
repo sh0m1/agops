@@ -564,3 +564,8 @@ def test_notes_review_verdicts(local_hub: Path, fake_home: Path, tmp_path: Path)
     blocked_review = bridge.review(now=now)
     blocked_verdicts = {entry["key"]: entry["verdict"] for entry in blocked_review["knowledge"]}
     assert blocked_verdicts["progress-note"] == "review"
+
+    # A note whose markers were damaged might still hold personal notes: never retire-safe.
+    note.write_text("no frontmatter at all", encoding="utf-8")
+    damaged = {entry["key"]: entry["verdict"] for entry in bridge.review(now=now)["knowledge"]}
+    assert damaged["progress-note"] == "review"

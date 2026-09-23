@@ -18,6 +18,8 @@ from agent_hub.notes import (
     hub_fingerprint,
     link_plan,
     plan_health,
+    plan_workspace,
+    project_workspace,
 )
 from agent_hub.state import PlanState, TaskState, load_plan
 
@@ -462,6 +464,18 @@ def test_plan_health_transitions() -> None:
     stalled_at = (now - timedelta(days=8)).isoformat().replace("+00:00", "Z")
     stalled = PlanState("p", approved_revision=1, last_event_at=stalled_at)
     assert plan_health(stalled, execution_plan, now) == "stalled"
+
+
+def test_unregistered_sub_project_inherits_parent_workspace() -> None:
+    projects = [
+        {"id": "acme-stack", "workspace": "acme-ws"},
+        {"id": "acme-stack-extra", "workspace": "other"},
+    ]
+    assert project_workspace("acme-stack-backend", projects) == "acme-ws"
+    assert project_workspace("acme-stack-extra-ui", projects) == "other"
+    assert project_workspace("acme-stackish", projects) is None
+    plan = {"id": "acme-x", "tasks": [{"id": "a", "project": "acme-stack-frontend"}]}
+    assert plan_workspace(plan, projects) == "acme-ws"
 
 
 def test_link_plan_prefers_direct_mention_then_key_core() -> None:

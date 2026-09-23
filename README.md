@@ -215,6 +215,14 @@ writes it once and never overwrites your edits. `agops notes review` prints a re
 report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
 `agops-notes` skill to act on.
 
+## Skills
+
+`agops setup` installs the packaged `agops-notes` skill for both Claude Code and Codex
+(`~/.claude/skills/` and `~/.codex/skills/`), so either agent can triage the notes vault - see
+"Notes apps" above. Re-run just this step with `agops skills install`. It never overwrites a
+skill directory you edited by hand (no `managed-by: agops` marker in its `SKILL.md`); such a
+directory is reported "skipped (unmanaged)" instead.
+
 ## Tool access order
 
 The managed instruction block tells agents to try a CLI or MCP tool first for any external system,

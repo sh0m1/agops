@@ -46,6 +46,10 @@ class PlanState:
     completed: bool = False
     cancelled: bool = False
     tasks: dict[str, TaskState] = field(default_factory=dict)
+    first_event_at: str | None = None
+    last_event_at: str | None = None
+    completed_at: str | None = None
+    cancelled_at: str | None = None
 
     @property
     def active(self) -> bool:
@@ -64,17 +68,30 @@ class State:
         if not plan_id:
             return
         plan = self.plan(plan_id)
+        occurred_at = event.get("occurred_at")
+        if occurred_at:
+            if plan.first_event_at is None or parse_time(occurred_at) < parse_time(
+                plan.first_event_at
+            ):
+                plan.first_event_at = occurred_at
+            if plan.last_event_at is None or parse_time(occurred_at) > parse_time(
+                plan.last_event_at
+            ):
+                plan.last_event_at = occurred_at
         kind = event["type"]
         payload = event.get("payload", {})
         if kind == "plan_approved":
             plan.approved_revision = int(payload["revision"])
             plan.completed = False
+            plan.completed_at = None
             return
         if kind == "plan_completed":
             plan.completed = True
+            plan.completed_at = occurred_at
             return
         if kind == "plan_cancelled":
             plan.cancelled = True
+            plan.cancelled_at = occurred_at
             return
         task_id = event.get("task_id")
         if not task_id:
@@ -122,6 +139,7 @@ class State:
             task.lease_until = None
             if payload.get("completes_plan"):
                 plan.completed = True
+                plan.completed_at = occurred_at
 
 
 def load_state(root: Path) -> State:

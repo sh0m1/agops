@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
     notes_connect = notes_commands.add_parser("connect")
     notes_connect.add_argument("target")
     notes_commands.add_parser("status")
+    notes_commands.add_parser("review")
     notes_commands.add_parser("sync")
     notes_resolve = notes_commands.add_parser("resolve")
     notes_resolve.add_argument("plan_id")
@@ -256,6 +257,8 @@ def dispatch(args: argparse.Namespace) -> Any:
             return bridge.connect(Path(args.target))
         if args.notes_command == "status":
             return bridge.status()
+        if args.notes_command == "review":
+            return bridge.review()
         if args.notes_command == "disconnect":
             return bridge.disconnect()
         actor, session = actor_session(args)

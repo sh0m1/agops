@@ -17,7 +17,7 @@ from .hub import Hub, read_frontmatter
 from .notes import NotesBridge
 from .policy import PolicyError, policy_path
 from .sessions import record_session, resolve_model
-from .setup import setup
+from .setup import install_skills, setup
 from .state import load_plan
 
 
@@ -96,6 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_parser.add_argument("--runtime", help="Override the profile's runtime clone path")
     setup_parser.add_argument("--keep-claude-memory", action="store_true")
+
+    skills_parser = commands.add_parser("skills")
+    skills_commands = skills_parser.add_subparsers(dest="skills_command", required=True)
+    skills_commands.add_parser("install")
 
     profile_parser = commands.add_parser("profile")
     profile_commands = profile_parser.add_subparsers(dest="profile_command", required=True)
@@ -241,6 +245,8 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "adapter":
         tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
         return {"written": install_adapters(Path(args.path), tools)}
+    if args.command == "skills":
+        return install_skills()
     hub = Hub.from_environment(args.repo)
     if args.command == "sync":
         return hub.sync()

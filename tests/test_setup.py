@@ -9,7 +9,13 @@ from conftest import git, which_for
 
 from agent_hub.health import doctor
 from agent_hub.hub import Hub
-from agent_hub.setup import INSTRUCTIONS, config_path, merge_managed_block, setup
+from agent_hub.setup import (
+    INSTRUCTIONS,
+    config_path,
+    install_skills,
+    merge_managed_block,
+    setup,
+)
 
 
 def test_managed_instruction_block_is_idempotent_and_preserves_existing(tmp_path: Path) -> None:
@@ -213,6 +219,7 @@ def test_setup_summary_matches_doctor_and_scan(
         "remote_removed",
         "profile",
         "default_profile",
+        "skills",
     }
     assert summary["profile"] == "default" and summary["default_profile"] == "default"
     assert summary["remote_removed"] is None
@@ -281,3 +288,52 @@ def test_setup_claude_memory_toggle(
     )
     assert kept["claude_memory_disabled"] is False
     assert json.loads(other_settings.read_text(encoding="utf-8")) == {"autoMemoryEnabled": True}
+
+
+# --- install_skills() -----------------------------------------------------------------------
+
+
+def _skill_manifest(home: Path, client: str) -> Path:
+    return home / client / "skills" / "agops-notes" / "SKILL.md"
+
+
+def test_install_skills_writes_both_clients(fake_home: Path) -> None:
+    result = install_skills(fake_home)
+    claude_manifest = _skill_manifest(fake_home, ".claude")
+    codex_manifest = _skill_manifest(fake_home, ".codex")
+    assert result[str(claude_manifest.parent)] == "installed"
+    assert result[str(codex_manifest.parent)] == "installed"
+    assert "managed-by: agops" in claude_manifest.read_text(encoding="utf-8")
+    assert claude_manifest.read_text(encoding="utf-8") == codex_manifest.read_text(encoding="utf-8")
+
+
+def test_install_skills_second_run_is_unchanged(fake_home: Path) -> None:
+    install_skills(fake_home)
+    result = install_skills(fake_home)
+    assert result[str(_skill_manifest(fake_home, ".claude").parent)] == "unchanged"
+    assert result[str(_skill_manifest(fake_home, ".codex").parent)] == "unchanged"
+
+
+def test_install_skills_skips_an_unmanaged_file(fake_home: Path) -> None:
+    manifest = _skill_manifest(fake_home, ".claude")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("---\nname: agops-notes\n---\nMy own skill.\n", encoding="utf-8")
+    before = manifest.read_bytes()
+
+    result = install_skills(fake_home)
+    assert result[str(manifest.parent)] == "skipped (unmanaged)"
+    assert manifest.read_bytes() == before
+    assert result[str(_skill_manifest(fake_home, ".codex").parent)] == "installed"
+
+
+def test_install_skills_updates_a_stale_managed_file(fake_home: Path) -> None:
+    manifest = _skill_manifest(fake_home, ".codex")
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "---\nname: agops-notes\nmetadata:\n  managed-by: agops\n---\nOld content.\n",
+        encoding="utf-8",
+    )
+    result = install_skills(fake_home)
+    assert result[str(manifest.parent)] == "installed"
+    assert "Old content." not in manifest.read_text(encoding="utf-8")
+    assert "managed-by: agops" in manifest.read_text(encoding="utf-8")

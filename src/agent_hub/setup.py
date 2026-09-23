@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +26,7 @@ from .sessions import default_home
 __all__ = [
     "INSTRUCTIONS",
     "config_path",
+    "install_skills",
     "merge_managed_block",
     "render_instructions",
     "setup",
@@ -214,6 +218,7 @@ def setup(
     if tools["codex"] == "configured":
         _ensure_codex_env_vars(home / ".codex" / "config.toml")
 
+    skills = install_skills(home)
     report = doctor(hub, home=home, which=which, runner=runner)
     return {
         "ok": bool(report["ok"]),
@@ -229,6 +234,7 @@ def setup(
         "doctor": report,
         "scan": hub.scan(),
         "remote_removed": removed,
+        "skills": skills,
     }
 
 
@@ -315,3 +321,72 @@ def _ensure_codex_env_vars(config: Path) -> bool:
     lines.insert(start + 1, wanted)
     config.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
+
+
+MANAGED_SKILL_MARKER = "managed-by: agops"
+SKILL_CLIENT_DIRS = (".claude", ".codex")
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
+
+
+def _packaged_skills() -> list[Path]:
+    """Every skill directory shipped inside the installed `agent_hub` package."""
+    root = Path(str(resources.files("agent_hub") / "skills"))
+    if not root.is_dir():
+        return []
+    return sorted(path for path in root.iterdir() if path.is_dir())
+
+
+def _skill_files(directory: Path) -> dict[str, Path]:
+    return {
+        path.relative_to(directory).as_posix(): path
+        for path in directory.rglob("*")
+        if path.is_file()
+    }
+
+
+def _skill_identical(source: Path, dest: Path) -> bool:
+    if not dest.is_dir():
+        return False
+    source_files, dest_files = _skill_files(source), _skill_files(dest)
+    if set(source_files) != set(dest_files):
+        return False
+    return all(
+        source_files[name].read_bytes() == dest_files[name].read_bytes() for name in source_files
+    )
+
+
+def install_skills(home: Path | None = None) -> dict[str, str]:
+    """Copy every packaged skill to Claude's and Codex's skill folders, idempotently.
+
+    A destination whose SKILL.md was written by hand (no `managed-by: agops` marker) is left
+    alone and reported "skipped (unmanaged)"; agops only overwrites its own installs.
+    """
+    home = (home or default_home()).expanduser()
+    results: dict[str, str] = {}
+    for source in _packaged_skills():
+        for client_dir in SKILL_CLIENT_DIRS:
+            dest = home / client_dir / "skills" / source.name
+            manifest = dest / "SKILL.md"
+            if manifest.exists() and MANAGED_SKILL_MARKER not in manifest.read_text(
+                encoding="utf-8"
+            ):
+                results[str(dest)] = "skipped (unmanaged)"
+                continue
+            if _skill_identical(source, dest):
+                results[str(dest)] = "unchanged"
+                continue
+            for name, path in _skill_files(source).items():
+                _atomic_write_bytes(dest / name, path.read_bytes())
+            results[str(dest)] = "installed"
+    return results

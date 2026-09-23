@@ -213,7 +213,8 @@ sorts and filters instead of just listing. `agops.base` is an Obsidian Bases fil
 views (active, stalled, by workspace, recently completed, knowledge, retire candidates); agops
 writes it once and never overwrites your edits. `agops notes review` prints a read-only JSON triage
 report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
-`agops-notes` skill to act on.
+`agops-notes` skill to act on. Add `keep: true` to a knowledge note's frontmatter to mark it kept;
+`agops notes review` then reports it as `keep` instead of flagging it again.
 
 ## Skills
 

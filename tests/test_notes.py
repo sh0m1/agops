@@ -488,6 +488,18 @@ def test_link_plan_prefers_direct_mention_then_key_core() -> None:
     unrelated = {"title": "Unrelated", "body": "", "key": "totally-unrelated-thing"}
     assert link_plan(unrelated, ["agops-notes-overview"]) is None
 
+    # A key equal to the full plan id (core alone would miss it) still links.
+    plans = ["quince-chat-outage-recovery-20260921"]
+    full_id_key = {"title": "Progress", "body": "", "key": "quince-chat-outage-recovery-20260921"}
+    assert link_plan(full_id_key, plans) == "quince-chat-outage-recovery-20260921"
+
+    suffixed = {"title": "Progress", "body": "", "key": "quince-chat-outage-recovery-foo"}
+    assert link_plan(suffixed, plans) == "quince-chat-outage-recovery-20260921"
+
+    # An unrelated key that only shares a shorter prefix must not link.
+    not_recovery = {"title": "Progress", "body": "", "key": "quince-chat-outage-20260921"}
+    assert link_plan(not_recovery, plans) is None
+
 
 def test_plans_and_home_show_workspace_health_and_activity(
     local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
@@ -562,6 +574,15 @@ def test_notes_review_verdicts(local_hub: Path, fake_home: Path, tmp_path: Path)
         "one",
         kind="fact",
     )
+    hub.add_knowledge(
+        "global",
+        "orphan-fact-2026-01-01",
+        "Orphan",
+        "A standalone fact tied to no plan.",
+        "codex",
+        "one",
+        kind="fact",
+    )
 
     bridge = _connected(hub, tmp_path / "vault")
     now = datetime.now(UTC) + timedelta(days=RETIRE_MIN_AGE_DAYS)
@@ -569,8 +590,18 @@ def test_notes_review_verdicts(local_hub: Path, fake_home: Path, tmp_path: Path)
     verdicts = {entry["key"]: entry["verdict"] for entry in review["knowledge"]}
     assert verdicts["team-decision"] == "keep"
     assert verdicts["progress-note"] == "retire_safe"
+    assert verdicts["orphan-fact-2026-01-01"] == "review"
 
     note = tmp_path / "vault" / "knowledge" / "global" / "progress-note.md"
+    original_note = note.read_text(encoding="utf-8")
+
+    # `keep: true` overrides retire_safe too.
+    note.write_text(original_note.replace("---\n", "---\nkeep: true\n", 1), encoding="utf-8")
+    kept_review = bridge.review(now=now)
+    kept_verdicts = {entry["key"]: entry["verdict"] for entry in kept_review["knowledge"]}
+    assert kept_verdicts["progress-note"] == "keep"
+    note.write_text(original_note, encoding="utf-8")
+
     note.write_text(
         note.read_text(encoding="utf-8").replace(PERSONAL_START, f"{PERSONAL_START}\nKeep this."),
         encoding="utf-8",
@@ -583,3 +614,23 @@ def test_notes_review_verdicts(local_hub: Path, fake_home: Path, tmp_path: Path)
     note.write_text("no frontmatter at all", encoding="utf-8")
     damaged = {entry["key"]: entry["verdict"] for entry in bridge.review(now=now)["knowledge"]}
     assert damaged["progress-note"] == "review"
+
+    # `keep: true` in a note's frontmatter blocks review from re-flagging it, and survives a
+    # re-render since non-agops_* frontmatter is preserved.
+    orphan_note = tmp_path / "vault" / "knowledge" / "global" / "orphan-fact-2026-01-01.md"
+    orphan_note.write_text(
+        orphan_note.read_text(encoding="utf-8").replace("---\n", "---\nkeep: true\n", 1),
+        encoding="utf-8",
+    )
+    kept_review = bridge.review(now=now)
+    kept_entry = next(
+        entry for entry in kept_review["knowledge"] if entry["key"] == "orphan-fact-2026-01-01"
+    )
+    assert kept_entry["verdict"] == "keep"
+    assert kept_entry["reason"] == "marked keep in notes"
+    assert kept_entry["kept"] is True
+
+    bridge.render_all()
+    assert "keep: true" in orphan_note.read_text(encoding="utf-8")
+    rerendered = {entry["key"]: entry["verdict"] for entry in bridge.review(now=now)["knowledge"]}
+    assert rerendered["orphan-fact-2026-01-01"] == "keep"

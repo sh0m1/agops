@@ -20,8 +20,9 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
 - `plans/<id>.md` — two-way: the fenced YAML definition imports as a new *unapproved*
   revision on `agops notes sync`. `knowledge/**` — read-only mirror.
 - Frontmatter `agops_*` fields are generated (`agops_health`, `agops_last_activity`,
-  `agops_workspace`, task counts). Users may add their own frontmatter and write inside the
-  `agops:personal` markers; both are preserved.
+  `agops_workspace`, task counts). Users may add their own frontmatter, including
+  `keep: true` on a knowledge note, and write inside the `agops:personal` markers; both
+  are preserved.
 
 Health, as of the last sync: `live` (a task has an active lease), `waiting` (recent
 activity, nobody working), `blocked` (every open task is blocked), `stalled` (no live claim
@@ -41,7 +42,9 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
    config fact), treat it as `review` instead.
 4. **Knowledge, ask:** list `verdict: review` entries in one short table. Offer to fold a
    plan's surviving log entries into one `archive` entry (`agops knowledge add --kind
-   archive ... `) and retire the originals — only after the user agrees.
+   archive ... `) and retire the originals — only after the user agrees. For an entry the
+   user wants to keep, add `keep: true` to that note's frontmatter (outside the `agops_*`
+   keys); it is preserved and makes `review` report `keep`.
 5. **Plans, ask:** from `plans`, list `stalled` and `blocked` plans, plus any plan you judge
    superseded (a later plan covers the same subject — compare titles, goals and blocked
    reasons). For each, give one line: plan, idle days, why, and the proposed action:

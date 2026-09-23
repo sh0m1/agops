@@ -344,7 +344,12 @@ def _knowledge_workspace(scope: str, projects: list[dict[str, Any]]) -> str:
 
 
 def link_plan(entry: dict[str, Any], plans: list[str]) -> str | None:
-    """The plan a knowledge entry belongs to: by id mention first, else by key."""
+    """The plan a knowledge entry belongs to: by id mention first, else by key.
+
+    A key matches a plan by either of two stems: the plan id's *core* (id minus its first
+    `-` segment, minus a trailing `-YYYYMMDD`), or the full id minus that trailing date —
+    so a key that repeats the whole plan id still links. The longest matching stem wins.
+    """
     haystack = f"{entry.get('title') or ''}\n{entry.get('body') or ''}"
     direct = [plan_id for plan_id in plans if plan_id in haystack]
     if direct:
@@ -355,10 +360,12 @@ def link_plan(entry: dict[str, Any], plans: list[str]) -> str | None:
     for plan_id in plans:
         core = plan_id.split("-", 1)[1] if "-" in plan_id else plan_id
         core = _ID_DATE_SUFFIX.sub("", core)
-        if not core:
-            continue
-        if (key == core or key.startswith(core + "-")) and len(core) > best_len:
-            best_plan, best_len = plan_id, len(core)
+        full = _ID_DATE_SUFFIX.sub("", plan_id)
+        for stem in {core, full}:
+            if not stem:
+                continue
+            if (key == stem or key.startswith(stem + "-")) and len(stem) > best_len:
+                best_plan, best_len = plan_id, len(stem)
     return best_plan
 
 
@@ -368,8 +375,11 @@ def _knowledge_verdict(
     plan_status: str | None,
     has_personal_notes: bool,
     age_days: int | None,
+    keep: bool,
 ) -> tuple[str, str | None]:
     """Whether a knowledge entry can be retired, and why."""
+    if keep:
+        return "keep", "marked keep in notes"
     if entry["kind"] != "fact":
         return "keep", None
     if plan_id and plan_status in {"completed", "cancelled"}:
@@ -1203,18 +1213,27 @@ class NotesBridge:
         self.render_all(force=True, plan_ids={plan_id})
         return {"resolved": plan_id, "take": take, "imported": take == "notes"}
 
-    def _has_personal_notes(self, target: Path | None, relative: str) -> bool:
+    def _note_flags(self, target: Path | None, relative: str) -> tuple[bool, bool]:
+        """(has_personal_notes, keep) for a mirrored knowledge note.
+
+        `keep` is true only when the note's custom frontmatter has `keep: true` (YAML
+        boolean) or the string "true"/"yes" (case-insensitive).
+        """
         if target is None:
-            return False
+            return False, False
         path = target / relative
         if not path.exists():
-            return False
+            return False, False
         try:
-            _, personal = self._frontmatter_and_personal(path)
+            frontmatter, personal = self._frontmatter_and_personal(path)
         except ValueError:
             # An unreadable note may still hold personal notes: never make it retire-safe.
-            return True
-        return bool(personal)
+            return True, False
+        keep_value = frontmatter.get("keep")
+        keep = keep_value is True or (
+            isinstance(keep_value, str) and keep_value.strip().lower() in {"true", "yes"}
+        )
+        return bool(personal), keep
 
     def review(self, now: datetime | None = None) -> dict[str, Any]:
         """A read-only triage report: which plans need attention, which knowledge can retire."""
@@ -1261,11 +1280,11 @@ class NotesBridge:
         for entry in self._knowledge_entries():
             plan_id = link_plan(entry, plan_ids)
             plan_status = _status(state.plans[plan_id]) if plan_id else None
-            has_personal = self._has_personal_notes(target, entry["relative"])
+            has_personal, keep = self._note_flags(target, entry["relative"])
             created_at = entry.get("created_at")
             age_days = (now - parse_time(created_at)).days if created_at else None
             verdict, reason = _knowledge_verdict(
-                entry, plan_id, plan_status, has_personal, age_days
+                entry, plan_id, plan_status, has_personal, age_days, keep
             )
             if verdict == "retire_safe":
                 retire_safe += 1
@@ -1281,6 +1300,7 @@ class NotesBridge:
                     "plan": plan_id,
                     "plan_status": plan_status,
                     "has_personal_notes": has_personal,
+                    "kept": keep,
                     "verdict": verdict,
                     "reason": reason,
                 }

@@ -186,12 +186,40 @@ agops notes status
 agops notes sync
 ```
 
-The folder holds the whole working picture: `Plans.md` and `plans/<id>.md` for the plans,
-`knowledge/<scope>/<key>.md` with a `Knowledge.md` index for the knowledge entries, `Projects.md`
-for the registered repositories by workspace, and `Activity.md` for who has claimed what, what is
-blocked, and what is ready next. Only plan notes are two-way; knowledge, projects, and activity are
-a read-only mirror of the hub, so change knowledge with `agops knowledge add` rather than in the
-vault. Personal notes are preserved in every note.
+The folder holds the whole working picture, and `Home.md` is the place to start: one page with
+what needs a human (draft plans, pending approvals, blocked tasks, expired claims, notes agops
+could not refresh), what is in progress and ready next, the open plans with their progress, the
+most recent knowledge, and the repositories that have tracked work. Behind it:
+
+```
+Home.md                         the overview
+Plans.md, plans/<id>.md         plans (two-way)
+Knowledge.md, knowledge/<scope>/<key>.md
+Projects.md, projects/<id>.md   one note per registered repository
+Activity.md                     claims, blockers, ready tasks
+views/*.base                    Obsidian Bases tables for plans, knowledge, and projects
+```
+
+Notes link to each other with relative Markdown links: a plan links the repositories its tasks
+touch and the knowledge related to it (entries scoped to those repositories, or whose key starts
+with the plan id); a repository note lists its plan tasks and knowledge; a knowledge note links
+back to its repository and plans. Task statuses reflect the plan: tasks in a draft are `planned`,
+and tasks in an active plan are `ready`, `waiting` on dependencies, `claimed`, `blocked`, or
+`completed`. Every note carries `agops_*` properties and an `agops/plan`, `agops/knowledge`, or
+`agops/project` tag, plus its title or repository name as an alias, so Bases, search, and `[[`
+link completion all work. The `views/` files are seeded once; after you customize one in
+Obsidian, agops leaves it alone, and deleting it restores the default.
+
+Only plan notes are two-way; knowledge, projects, and activity are a read-only mirror of the
+hub, so change knowledge with `agops knowledge add` rather than in the vault. Personal notes are
+preserved in every note, and unchanged notes are not rewritten, so a synced vault only sees real
+changes.
+
+`agops setup` also installs the `agops-obsidian` skill for Claude Code and Codex. It tells an
+agent how to answer "give me an overview" from `Home.md`, which files in the agops folder it may
+edit, and how to keep the rest of the vault ordered (Inbox, Todo, Meetings, Topics, Archive)
+without moving anything before the user approves the plan. A skill file you wrote yourself under
+the same name is never overwritten.
 
 Agops exports after successful hub changes and after `agops sync`. Editing a plan note is safe but
 intentional: `agops notes sync` validates the fenced YAML and creates a new **unapproved** plan

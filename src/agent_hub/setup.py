@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,9 @@ from .sessions import default_home
 
 __all__ = [
     "INSTRUCTIONS",
+    "SKILLS",
     "config_path",
+    "install_skills",
     "merge_managed_block",
     "render_instructions",
     "setup",
@@ -184,6 +187,7 @@ def setup(
         "claude_md": _merge_and_report(home / ".claude" / "CLAUDE.md", rendered),
     }
     memory_disabled = disable_claude_memory and _disable_claude_memory(home)
+    skills = install_skills(home)
 
     tools = {
         "codex": _replace_mcp(
@@ -224,6 +228,7 @@ def setup(
         "tools": tools,
         "instructions": instructions,
         "claude_memory_disabled": memory_disabled,
+        "skills": skills,
         "policy": policy,
         "doctor": report,
         "scan": hub.scan(),
@@ -256,6 +261,44 @@ in place; use the CLI or MCP tools so concurrent changes are validated and publi
 
 No credentials, `.env` contents, private keys, or raw agent transcripts belong here.
 """
+
+
+# Skills ship inside the package and are copied into each client's user skill directory.
+SKILLS = ("agops-obsidian",)
+SKILL_MARKER = "agops:managed-skill"
+SKILL_CLIENTS = {"claude": ".claude", "codex": ".codex"}
+
+
+def install_skills(home: Path | None = None) -> dict[str, dict[str, str]]:
+    """Install or refresh the bundled skills for every client whose home directory exists.
+
+    A skill file without the agops marker belongs to the user and is left alone.
+    """
+    home = (home or default_home()).expanduser()
+    report: dict[str, dict[str, str]] = {}
+    for client, directory in SKILL_CLIENTS.items():
+        root = home / directory
+        results: dict[str, str] = {}
+        for name in SKILLS:
+            if not root.is_dir():
+                results[name] = "skipped-client-not-installed"
+                continue
+            source = resources.files("agent_hub").joinpath("skills", name, "SKILL.md")
+            content = source.read_text(encoding="utf-8")
+            path = root / "skills" / name / "SKILL.md"
+            if path.exists():
+                existing = path.read_text(encoding="utf-8")
+                if SKILL_MARKER not in existing:
+                    results[name] = "skipped-user-owned"
+                    continue
+                if existing == content:
+                    results[name] = "unchanged"
+                    continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            results[name] = "installed"
+        report[client] = results
+    return report
 
 
 def _merge_and_report(path: Path, content: str = INSTRUCTIONS) -> str:

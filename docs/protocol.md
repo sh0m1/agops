@@ -49,20 +49,35 @@ reads and writes only its own hub.
 Each configured profile may have one absolute `notes_target` in config schema version 3. `agops
 notes connect TARGET` accepts only a new, empty, or already agops-managed directory and writes:
 
-- `Plans.md`, an index grouped by draft, active, completed, and cancelled plans;
+- `Home.md`, the overview: items that need a human, claimed and ready tasks, open plans with
+  progress, the most recent knowledge, and the repositories with tracked work;
+- `Plans.md`, an index grouped by active, draft, completed, and cancelled plans;
 - `plans/<plan-id>.md`, containing portable frontmatter, an editable fenced YAML definition,
-  generated state, and an excluded personal-notes region; and
+  generated state, and an excluded personal-notes region;
 - `knowledge/<scope-path>/<key>.md`, one note per active knowledge entry;
+- `projects/<project-id>.md`, one note per registered project with its plan tasks and knowledge;
 - `Knowledge.md`, `Projects.md`, and `Activity.md`, generated indexes of the knowledge
   entries, the registered projects grouped by workspace, and the current claims, blockers,
-  and ready tasks; and
+  and ready tasks;
+- `views/Plans.base`, `views/Knowledge.base`, and `views/Projects.base`, Obsidian Bases views
+  that select notes by tag; and
 - `.agops-notes.json`, a format-versioned semantic baseline.
+
+Every note is rendered from one snapshot of the hub, and notes link to each other with relative
+Markdown links. A plan's related knowledge is every entry scoped to a project its tasks touch,
+plus every entry whose key equals the plan id or starts with `<plan-id>-`. Frontmatter holds
+custom keys first, then `agops_*` keys, then `aliases` and `tags`; agops merges its own alias
+(the title, or the repository name) and tag (`agops/plan`, `agops/knowledge`, or
+`agops/project`) with the user's, and records its alias in `agops_aliases` so a rename replaces
+it. A file is written only when its rendered content differs.
 
 Knowledge, project, and activity files are a one-way mirror: the hub is the only writer and
 `notes sync` never imports them, so a knowledge note is corrected with `agops knowledge add`.
-Their personal-notes region is still preserved across renders. A retired or superseded entry
-leaves the mirror on the next render; if its note carries personal notes the file is kept and
-reported as a warning instead of deleted.
+Their personal-notes region is still preserved across renders. A retired or superseded entry, or
+a project that is no longer registered, leaves the mirror on the next render; if its note
+carries personal notes the file is kept and reported as a warning instead of deleted. A Bases
+view is written when missing or when it still matches the content agops last wrote (its hash
+is kept in the sidecar), so a view the user customized is never overwritten.
 
 The sidecar includes a fingerprint of its hub. For a hub with `origin`, this is a hash of the
 normalized remote identity, so separate clones share it; local-only hubs hash their resolved local

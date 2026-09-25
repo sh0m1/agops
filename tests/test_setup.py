@@ -207,6 +207,7 @@ def test_setup_summary_matches_doctor_and_scan(
         "tools",
         "instructions",
         "claude_memory_disabled",
+        "skills",
         "policy",
         "doctor",
         "scan",
@@ -281,3 +282,36 @@ def test_setup_claude_memory_toggle(
     )
     assert kept["claude_memory_disabled"] is False
     assert json.loads(other_settings.read_text(encoding="utf-8")) == {"autoMemoryEnabled": True}
+
+
+# --- bundled skills ------------------------------------------------------------------------
+
+
+def test_install_skills_writes_managed_skill_for_present_clients_only(tmp_path: Path) -> None:
+    from agent_hub.setup import install_skills
+
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    report = install_skills(home)
+    skill = home / ".claude" / "skills" / "agops-obsidian" / "SKILL.md"
+    assert report["claude"] == {"agops-obsidian": "installed"}
+    assert report["codex"] == {"agops-obsidian": "skipped-client-not-installed"}
+    text = skill.read_text(encoding="utf-8")
+    assert text.startswith("---\nname: agops-obsidian\n")
+    assert "agops:managed-skill" in text
+    assert install_skills(home)["claude"] == {"agops-obsidian": "unchanged"}
+
+    skill.write_text(text.replace("# Obsidian vault with agops", "# Outdated"), encoding="utf-8")
+    assert install_skills(home)["claude"] == {"agops-obsidian": "installed"}
+    assert skill.read_text(encoding="utf-8") == text
+
+
+def test_install_skills_leaves_a_user_owned_skill_alone(tmp_path: Path) -> None:
+    from agent_hub.setup import install_skills
+
+    home = tmp_path / "home"
+    skill = home / ".codex" / "skills" / "agops-obsidian" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("---\nname: agops-obsidian\n---\nMine.\n", encoding="utf-8")
+    assert install_skills(home)["codex"] == {"agops-obsidian": "skipped-user-owned"}
+    assert skill.read_text(encoding="utf-8").endswith("Mine.\n")

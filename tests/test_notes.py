@@ -184,11 +184,11 @@ def test_scalar_custom_tag_is_preserved_when_agops_tag_is_added(
     bridge = _connected(hub, tmp_path / "vault")
     note = tmp_path / "vault" / "plans" / "shared-plan.md"
     note.write_text(
-        note.read_text(encoding="utf-8").replace("tags:\n- agops", "tags: work"),
+        note.read_text(encoding="utf-8").replace("tags:\n- agops\n- agops/plan", "tags: work"),
         encoding="utf-8",
     )
     bridge.render_all(force=True)
-    assert "tags:\n- work\n- agops" in note.read_text(encoding="utf-8")
+    assert "tags:\n- work\n- agops\n- agops/plan" in note.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -346,7 +346,7 @@ def test_activity_shows_claims_and_blocked_tasks(
     _connected(hub, tmp_path / "vault")
     hub.claim_task("shared-plan", "first", "codex", "session-one", worktree)
     activity = (tmp_path / "vault" / "Activity.md").read_text(encoding="utf-8")
-    assert "`shared-plan` / `first`" in activity
+    assert "[Shared plan](plans/shared-plan.md) / `first` — First task" in activity
     assert "owner codex" in activity
     assert "`second`" not in activity  # blocked behind its dependency, so not ready yet
 
@@ -396,3 +396,172 @@ def test_mirrored_knowledge_note_edits_are_not_imported(
     assert "Rewritten by hand." not in note.read_text(encoding="utf-8")
     entry = next((local_hub / "memory" / "knowledge" / "global" / "testing").glob("*.md"))
     assert "Original body." in entry.read_text(encoding="utf-8")
+
+
+def _overview_hub(local_hub: Path, plan_file: Path, tmp_path: Path) -> Hub:
+    hub = Hub(local_hub, profile="default")
+    hub.register_project(make_project(tmp_path / "widgets"))
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.add_knowledge(
+        "project:acme-widgets", "deploys", "Deploys", "Deploy from main only.", "codex", "one"
+    )
+    hub.add_knowledge(
+        "workspace:acme", "shared-plan-review", "Plan review", "Reviewed.", "codex", "one"
+    )
+    return hub
+
+
+def test_home_is_an_overview_that_links_plans_projects_and_knowledge(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = _overview_hub(local_hub, plan_file, tmp_path)
+    _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+
+    home = (vault / "Home.md").read_text(encoding="utf-8")
+    assert home.startswith("# Overview\n\n1 plans (1 draft)")
+    assert "[Shared plan](plans/shared-plan.md) is a draft; approve it" in home
+    assert (
+        "| [Shared plan](plans/shared-plan.md) | draft | 0/2 "
+        "| [widgets](projects/acme-widgets.md) |" in home
+    )
+    assert "[Deploys](knowledge/project/acme-widgets/deploys.md) · fact · [widgets]" in home
+    assert (
+        "- [widgets](projects/acme-widgets.md) — 2 open of 2 plan tasks · 1 knowledge entry"
+        in home
+    )
+    assert "[Plans](views/Plans.base)" in home
+
+    plan = (vault / "plans" / "shared-plan.md").read_text(encoding="utf-8")
+    assert "- `first`: planned — First task" in plan  # a draft's tasks are not claimable
+    assert "  - [widgets](../projects/acme-widgets.md) · after `first`" in plan
+    assert "## Related knowledge" in plan
+    assert "[Plan review](../knowledge/workspace/acme/shared-plan-review.md)" in plan
+    assert "agops_tasks_total: 2" in plan and "- agops/plan" in plan
+
+    project = (vault / "projects" / "acme-widgets.md").read_text(encoding="utf-8")
+    assert "# widgets" in project and "aliases:\n- widgets" in project
+    assert "- Repository: https://github.com/acme/widgets" in project
+    assert "[Shared plan](../plans/shared-plan.md) · `second` — planned — Second task" in project
+    assert "[Deploys](../knowledge/project/acme-widgets/deploys.md)" in project
+    assert PERSONAL_START in project
+
+    knowledge = (vault / "knowledge" / "project" / "acme-widgets" / "deploys.md").read_text(
+        encoding="utf-8"
+    )
+    assert "- Scope: project [widgets](../../../projects/acme-widgets.md)" in knowledge
+    assert "- Related plans: [Shared plan](../../../plans/shared-plan.md)" in knowledge
+    assert "### With tracked work" in (vault / "Projects.md").read_text(encoding="utf-8")
+
+
+def test_active_plan_tasks_show_ready_and_waiting(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = _overview_hub(local_hub, plan_file, tmp_path)
+    hub.approve_plan("shared-plan")
+    _connected(hub, tmp_path / "vault")
+    plan = (tmp_path / "vault" / "plans" / "shared-plan.md").read_text(encoding="utf-8")
+    assert "- `first`: ready — First task" in plan
+    assert "- `second`: waiting — Second task" in plan
+    home = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
+    assert "_Nothing needs attention._" in home
+    assert "- [Shared plan](plans/shared-plan.md) / `first` — First task · [widgets]" in home
+
+
+def test_unsynced_plan_edit_is_flagged_on_home(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = _overview_hub(local_hub, plan_file, tmp_path)
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "plans" / "shared-plan.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace("Let agents cooperate.", "Edited."),
+        encoding="utf-8",
+    )
+    bridge.render_all()
+    home = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
+    assert "`plans/shared-plan.md` has definition edits that are not in the hub yet" in home
+
+
+def test_unchanged_notes_are_not_rewritten(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = _overview_hub(local_hub, plan_file, tmp_path)
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    notes = [path for path in vault.rglob("*") if path.suffix in {".md", ".base"}]
+    before = {path: path.stat().st_mtime_ns for path in notes}
+    assert bridge.render_all()["mirrored"]["written"] == 0
+    after = {path: path.stat().st_mtime_ns for path in before}
+    assert after == before
+
+
+def test_views_are_seeded_and_customized_views_are_kept(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    import yaml
+
+    from agent_hub.notes import VIEWS
+
+    hub = _overview_hub(local_hub, plan_file, tmp_path)
+    bridge = _connected(hub, tmp_path / "vault")
+    views = tmp_path / "vault" / "views"
+    assert sorted(path.name for path in views.iterdir()) == [
+        "Knowledge.base", "Plans.base", "Projects.base"
+    ]
+    for name, content in VIEWS.items():
+        parsed = yaml.safe_load(content)
+        assert parsed["views"] and parsed["filters"], name
+        for view in parsed["views"]:
+            assert {"type", "name", "order"} <= set(view), (name, view.get("name"))
+
+    custom = views / "Plans.base"
+    custom.write_text(custom.read_text(encoding="utf-8") + "# mine\n", encoding="utf-8")
+    bridge.render_all()
+    assert custom.read_text(encoding="utf-8").endswith("# mine\n")
+    custom.unlink()
+    bridge.render_all()
+    assert custom.read_text(encoding="utf-8") == VIEWS["Plans"]
+
+
+def test_agops_aliases_follow_the_title_and_user_aliases_survive(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = _overview_hub(local_hub, plan_file, tmp_path)
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "plans" / "shared-plan.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace(
+            "\naliases:\n- Shared plan", "\naliases:\n- Shared plan\n- My nickname"
+        ),
+        encoding="utf-8",
+    )
+    current = load_plan(local_hub, "shared-plan")
+    current["title"] = "Renamed plan"
+    baseline = bridge._sidecar(tmp_path / "vault")["plans"]["shared-plan"]["definition_hash"]
+    hub.draft_plan_definition(current, "codex", "two", 1, baseline)
+    text = note.read_text(encoding="utf-8")
+    assert "aliases:\n- My nickname\n- Renamed plan" in text
+    assert "- Shared plan" not in text
+
+
+def test_unregistered_project_note_is_pruned_unless_it_has_personal_notes(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.register_project(make_project(tmp_path / "widgets"))
+    hub.register_project(
+        make_project(tmp_path / "gadgets", "https://github.com/acme/gadgets.git")
+    )
+    bridge = _connected(hub, tmp_path / "vault")
+    kept = tmp_path / "vault" / "projects" / "acme-widgets.md"
+    kept.write_text(
+        kept.read_text(encoding="utf-8").replace(PERSONAL_START, f"{PERSONAL_START}\nMine."),
+        encoding="utf-8",
+    )
+    for path in (local_hub / "memory" / "projects").glob("*.yaml"):
+        path.unlink()
+    result = bridge.render_all()
+    assert not (tmp_path / "vault" / "projects" / "acme-gadgets.md").exists()
+    assert "Mine." in kept.read_text(encoding="utf-8")
+    assert any("project unregistered" in warning for warning in result["warnings"])

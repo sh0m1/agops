@@ -403,6 +403,11 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
         f"  codex:    {tool_words[summary['tools']['codex']]}",
         f"  claude:   {tool_words[summary['tools']['claude']]}",
         f"  policy:   {summary['policy'].replace('-', ' ')}",
+        "  skills:   "
+        + "; ".join(
+            f"{client} " + ", ".join(f"{name} {state}" for name, state in results.items())
+            for client, results in summary.get("skills", {}).items()
+        ),
         f"  scan:     {summary['scan']['files']} files, {summary['scan']['errors']} errors",
         "  doctor:   " + ("ok" if summary["ok"] else "NOT OK (" + ", ".join(failing) + ")"),
     ]

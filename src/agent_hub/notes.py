@@ -161,6 +161,34 @@ def _write_if_changed(path: Path, content: str) -> bool:
     return True
 
 
+def _remove_empty_dirs(root: Path) -> None:
+    """Drop folders a prune or a move left empty; the root folder itself stays."""
+    if not root.is_dir():
+        return
+    folders = sorted(
+        (path for path in root.rglob("*") if path.is_dir() and not path.is_symlink()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for folder in folders:
+        entries = list(folder.iterdir())
+        # Finder's .DS_Store alone does not make a folder worth keeping.
+        if all(entry.name == ".DS_Store" and entry.is_file() for entry in entries):
+            for entry in entries:
+                entry.unlink()
+            folder.rmdir()
+
+
+# Earlier versions generated Activity.md; Home.md now carries the same sections.
+_LEGACY_ACTIVITY = "# Activity\n\n_Back to [Home](Home.md)._\n"
+
+
+def _remove_legacy_activity(target: Path) -> None:
+    path = target / "Activity.md"
+    if path.is_file() and path.read_text(encoding="utf-8").startswith(_LEGACY_ACTIVITY):
+        path.unlink()
+
+
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -597,6 +625,7 @@ class NotesBridge:
                 for plan in plans
                 if any(related is entry for related in plan["knowledge"])
             ]
+        self._name_knowledge(knowledge, {plan["id"] for plan in plans} | registered)
         return {
             "plans": plans,
             "projects": projects,
@@ -606,12 +635,30 @@ class NotesBridge:
             "ready": self.hub.ready_tasks(),
         }
 
+    def _project_notes(self, target: Path, overview: dict[str, Any]) -> set[str]:
+        """Projects that get a note: those with tracked work, and any whose note holds
+        personal notes, which keeps that note refreshed instead of orphaned."""
+        notes = {project["id"] for project in overview["projects"] if project["tracked"]}
+        for project in overview["projects"]:
+            path = target / project["relative"]
+            if project["id"] in notes or not path.is_file():
+                continue
+            try:
+                _, personal = self._frontmatter_and_personal(path)
+            except ValueError:
+                continue
+            if personal:
+                notes.add(project["id"])
+        return notes
+
     def _project_link(self, overview: dict[str, Any], source: str, project_id: str | None) -> str:
         if not project_id:
             return ""
         if project_id not in overview["project_ids"]:
             return f"`{project_id}`"
         name = overview["project_names"][project_id]
+        if project_id not in overview.get("project_notes", overview["project_ids"]):
+            return f"`{name}`"
         return _link(source, f"projects/{project_id}.md", name)
 
     # --- Plan notes (two-way: only the definition fence is ever imported) -----------------
@@ -760,10 +807,28 @@ class NotesBridge:
                     "created_by": metadata.get("created_by"),
                     "revisions": len(revisions),
                     "body": body,
-                    "relative": f"knowledge/{scope_path}/{key}.md",
+                    "relative": f"knowledge/{key}.md",
+                    # Where earlier versions put the note; `_mirror` moves it from there.
+                    "legacy_relative": f"knowledge/{scope_path}/{key}.md",
                 }
             )
         return sorted(entries, key=lambda entry: (entry["scope"], entry["key"]))
+
+    @staticmethod
+    def _name_knowledge(knowledge: list[dict[str, Any]], reserved: set[str]) -> None:
+        """Keep knowledge in one flat folder while every note's file name stays unique.
+
+        Obsidian resolves `[[name]]` by file name, so a key shared by two scopes, or equal to
+        a plan or project id, gets its scope appended.
+        """
+        uses: dict[str, int] = {}
+        for entry in knowledge:
+            uses[entry["key"]] = uses.get(entry["key"], 0) + 1
+        for entry in knowledge:
+            name = entry["key"]
+            if uses[name] > 1 or name in reserved:
+                name = f"{name}--{slug(entry['scope'])}"
+            entry["relative"] = f"knowledge/{name}.md"
 
     def _render_knowledge(
         self, entry: dict[str, Any], overview: dict[str, Any], path: Path
@@ -939,6 +1004,7 @@ class NotesBridge:
             lines.extend(["", f"## {workspace}"])
             active = [project for project in group if project["tracked"]]
             quiet = [project for project in group if not project["tracked"]]
+            notes = overview.get("project_notes", overview["project_ids"])
             if active:
                 lines.extend(["", "### With tracked work", ""])
                 for project in active:
@@ -947,11 +1013,15 @@ class NotesBridge:
                         f" `{project['id']}` — {_project_counts(project)}"
                     )
             if quiet:
+                # Only repositories with something to show get a note of their own.
                 lines.extend(["", "### Other repositories", ""])
                 for project in quiet:
-                    lines.append(
-                        f"- [{_label(project['name'])}]({project['relative']}) `{project['id']}`"
+                    name = (
+                        f"[{_label(project['name'])}]({project['relative']})"
+                        if project["id"] in notes
+                        else _label(project["name"])
                     )
+                    lines.append(f"- {name} `{project['id']}`")
         lines.append("")
         return "\n".join(lines)
 
@@ -994,18 +1064,6 @@ class NotesBridge:
                 + (f" · tier {task['tier']}" if task.get("tier") else "")
             )
         return {"claimed": claimed, "blocked": blocked, "ready": ready}
-
-    def _activity(self, overview: dict[str, Any]) -> str:
-        """What the agents are doing right now: live claims, blockers, and what is next."""
-        now = self._now(overview, "Activity.md")
-        lines = ["# Activity", "", "_Back to [Home](Home.md)._", "", "## Claimed tasks", ""]
-        lines.extend(now["claimed"] or ["_None._"])
-        lines.extend(["", "## Blocked tasks", ""])
-        lines.extend(now["blocked"] or ["_None._"])
-        lines.extend(["", "## Ready next", ""])
-        lines.extend(now["ready"] or ["_None._"])
-        lines.append("")
-        return "\n".join(lines)
 
     def _home(self, overview: dict[str, Any], attention: list[str]) -> str:
         """The entry point: one screen that says what needs a human and what is moving."""
@@ -1116,7 +1174,7 @@ class NotesBridge:
                 "## Browse",
                 "",
                 "- Indexes: [Plans](Plans.md) · [Knowledge](Knowledge.md) · "
-                "[Projects](Projects.md) · [Activity](Activity.md)",
+                "[Projects](Projects.md)",
                 "- Obsidian Bases: "
                 + " · ".join(f"[{name}](views/{name}.base)" for name in VIEWS),
                 "",
@@ -1157,15 +1215,48 @@ class NotesBridge:
             known.pop(relative, None)
         return warnings
 
+    @staticmethod
+    def _move_knowledge_note(target: Path, known: dict[str, Any], entry: dict[str, Any]) -> None:
+        """Carry an entry's note to its current path, so personal notes survive a rename.
+
+        The old path is either where the sidecar last recorded this scope and key, or where
+        earlier versions nested knowledge by scope.
+        """
+        path = target / entry["relative"]
+        if path.exists():
+            return
+        candidates = [
+            relative
+            for relative, record in known.items()
+            if relative != entry["relative"]
+            and record.get("scope") == entry["scope"]
+            and record.get("key") == entry["key"]
+        ]
+        if entry["legacy_relative"] != entry["relative"]:
+            candidates.append(entry["legacy_relative"])
+        for relative in candidates:
+            old = target / relative
+            if old.is_file():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(old, path)
+                known.pop(relative, None)
+                return
+
     def _mirror(
         self, target: Path, sidecar: dict[str, Any], overview: dict[str, Any]
     ) -> tuple[dict[str, int], list[str]]:
         """Refresh the knowledge and project notes and the generated indexes."""
         warnings: list[str] = []
         written = 0
+        notes = overview["project_notes"]
         for kind, items, render, reason in (
             ("knowledge", overview["knowledge"], self._render_knowledge, "entry retired"),
-            ("projects", overview["projects"], self._render_project, "project unregistered"),
+            (
+                "projects",
+                [project for project in overview["projects"] if project["id"] in notes],
+                self._render_project,
+                "no tracked work or project unregistered",
+            ),
         ):
             known: dict[str, Any] = sidecar.setdefault(kind, {})
             seen: set[str] = set()
@@ -1173,6 +1264,8 @@ class NotesBridge:
                 relative = item["relative"]
                 seen.add(relative)
                 path = target / relative
+                if kind == "knowledge":
+                    self._move_knowledge_note(target, known, item)
                 try:
                     rendered = render(item, overview, path)
                 except ValueError as exc:
@@ -1181,14 +1274,20 @@ class NotesBridge:
                 if _write_if_changed(path, rendered):
                     written += 1
                 known[relative] = (
-                    {"id": item["id"], "revisions": item["revisions"]}
+                    {
+                        "id": item["id"],
+                        "revisions": item["revisions"],
+                        "scope": item["scope"],
+                        "key": item["key"],
+                    }
                     if kind == "knowledge"
                     else {"id": item["id"]}
                 )
             warnings.extend(self._prune(target, known, seen, reason))
+            _remove_empty_dirs(target / kind)
         _write_if_changed(target / "Knowledge.md", self._knowledge_index(overview))
         _write_if_changed(target / "Projects.md", self._projects_index(overview))
-        _write_if_changed(target / "Activity.md", self._activity(overview))
+        _remove_legacy_activity(target)
         self._write_views(target, sidecar)
         mirrored = {
             "knowledge": len(overview["knowledge"]),
@@ -1263,6 +1362,7 @@ class NotesBridge:
             raise ValueError(f"Notes target is unavailable: {target}")
         sidecar = self._sidecar(target)
         overview = self._overview()
+        overview["project_notes"] = self._project_notes(target, overview)
         written: list[str] = []
         warnings: list[str] = []
         attention: list[str] = []

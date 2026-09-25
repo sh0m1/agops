@@ -22,10 +22,10 @@ that already holds personal notes.
 | Path | Who writes it | What you may change |
 | --- | --- | --- |
 | `Home.md` | agops | Nothing. It is the overview; refresh it with `agops sync`. |
-| `Plans.md`, `Knowledge.md`, `Projects.md`, `Activity.md` | agops | Nothing. |
+| `Plans.md`, `Knowledge.md`, `Projects.md` | agops | Nothing. |
 | `plans/<id>.md` | two-way | The fenced YAML definition (then `agops notes sync`, which drafts an **unapproved** revision), the personal-notes region, and non-`agops_` frontmatter. |
-| `knowledge/<scope>/<key>.md` | agops | The personal-notes region only. Change the entry with `agops knowledge add` or `agops knowledge retire`. |
-| `projects/<id>.md` | agops | The personal-notes region only. |
+| `knowledge/<key>.md` (or `<key>--<scope>.md` when the key is not unique) | agops | The personal-notes region only. Change the entry with `agops knowledge add` or `agops knowledge retire`. |
+| `projects/<id>.md`, only for repositories with plan tasks or knowledge | agops | The personal-notes region only. Writing personal notes into one keeps it even when the work is gone. |
 | `views/*.base` | seeded by agops | Anything. Once the user customizes a view, agops stops updating it; deleting it restores the default. |
 | `.agops-notes.json` | agops | Never touch. |
 
@@ -67,7 +67,8 @@ Conventions to keep the vault navigable:
 - Dated sections use ISO headings, `## 2026-09-21`. A line like `#21-09` is parsed by
   Obsidian as a tag, not a heading, so offer to convert such markers, but only with approval.
 - Link to agops notes by file name, which is unique: `[[network-isolation]]` for a plan,
-  `[[jeppesen-foreflight-airflow|airflow]]` for a repository. The link then shows up under
+  `[[jeppesen-foreflight-airflow|airflow]]` for a repository. A repository without tracked work
+  has no note yet (it is listed in `Projects.md`), so a link to it stays unresolved until it does. The link then shows up under
   "Linked mentions" on the agops note, which is how personal notes and hub state meet.
   Every agops note carries its title or repository name as an alias, so `[[` autocomplete
   finds it by that name too.

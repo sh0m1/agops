@@ -194,9 +194,8 @@ most recent knowledge, and the repositories that have tracked work. Behind it:
 ```
 Home.md                         the overview
 Plans.md, plans/<id>.md         plans (two-way)
-Knowledge.md, knowledge/<scope>/<key>.md
-Projects.md, projects/<id>.md   one note per registered repository
-Activity.md                     claims, blockers, ready tasks
+Knowledge.md, knowledge/<key>.md  knowledge, one flat folder
+Projects.md, projects/<id>.md   every repository in Projects.md; a note for those with work
 views/*.base                    Obsidian Bases tables for plans, knowledge, and projects
 ```
 
@@ -207,13 +206,18 @@ back to its repository and plans. Task statuses reflect the plan: tasks in a dra
 and tasks in an active plan are `ready`, `waiting` on dependencies, `claimed`, `blocked`, or
 `completed`. Every note carries `agops_*` properties and an `agops/plan`, `agops/knowledge`, or
 `agops/project` tag, plus its title or repository name as an alias, so Bases, search, and `[[`
-link completion all work. The `views/` files are seeded once; after you customize one in
+link completion all work. Knowledge sits in one folder whatever its scope; a key that two scopes
+share, or that equals a plan or project id, gets its scope appended (`deploys--global.md`) so
+every file name in the folder stays unique. A repository gets a note once it has plan tasks or
+knowledge (or personal notes you wrote in its note); the rest are listed in `Projects.md`
+without one. The `views/` files are seeded once; after you customize one in
 Obsidian, agops leaves it alone, and deleting it restores the default.
 
-Only plan notes are two-way; knowledge, projects, and activity are a read-only mirror of the
-hub, so change knowledge with `agops knowledge add` rather than in the vault. Personal notes are
+Only plan notes are two-way; knowledge and project notes are a read-only mirror of the hub, so change knowledge with `agops knowledge add` rather than in the vault. Personal notes are
 preserved in every note, and unchanged notes are not rewritten, so a synced vault only sees real
-changes.
+changes. A note that moves (knowledge written by an older agops under `knowledge/<scope>/`, or a
+file that gains a scope suffix) is moved with its personal notes, and folders a prune or a move
+leaves empty are removed.
 
 `agops setup` also installs the `agops-obsidian` skill for Claude Code and Codex. It tells an
 agent how to answer "give me an overview" from `Home.md`, which files in the agops folder it may

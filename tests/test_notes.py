@@ -305,7 +305,7 @@ def test_hub_returns_notes_warnings_after_a_durable_event(
     assert hub.sync()["notes_warning"] == "Notes refresh failed: disk"
 
 
-def test_knowledge_projects_and_activity_are_mirrored(
+def test_knowledge_and_projects_are_mirrored(
     local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
 ) -> None:
     hub = Hub(local_hub, profile="default")
@@ -320,22 +320,27 @@ def test_knowledge_projects_and_activity_are_mirrored(
     bridge = _connected(hub, tmp_path / "vault")
     vault = tmp_path / "vault"
 
-    note = vault / "knowledge" / "global" / "testing.md"
+    note = vault / "knowledge" / "testing.md"
     text = note.read_text(encoding="utf-8")
     assert "agops_scope: global" in text
     assert "Always keep concrete evidence." in text
     assert PERSONAL_START in text
-    assert (vault / "knowledge" / "project" / "acme-widgets" / "deploys.md").exists()
+    assert (vault / "knowledge" / "deploys.md").exists()
+    assert [path for path in (vault / "knowledge").iterdir() if path.is_dir()] == []
     index = (vault / "Knowledge.md").read_text(encoding="utf-8")
-    assert "[Testing](knowledge/global/testing.md)" in index
+    assert "[Testing](knowledge/testing.md)" in index
     assert "## project:acme-widgets" in index
     projects = (vault / "Projects.md").read_text(encoding="utf-8")
     assert "`acme-widgets`" in projects
-    assert "# Activity" in (vault / "Activity.md").read_text(encoding="utf-8")
+    assert not (vault / "Activity.md").exists()
     assert bridge.status()["mirrored"] == {"knowledge": 2, "projects": 1}
 
 
-def test_activity_shows_claims_and_blocked_tasks(
+def _section(text: str, heading: str) -> str:
+    return text.split(f"\n{heading}\n", 1)[1].split("\n## ", 1)[0]
+
+
+def test_home_shows_claims_and_blocked_tasks(
     local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
 ) -> None:
     hub = Hub(local_hub, profile="default")
@@ -345,14 +350,16 @@ def test_activity_shows_claims_and_blocked_tasks(
     hub.approve_plan("shared-plan")
     _connected(hub, tmp_path / "vault")
     hub.claim_task("shared-plan", "first", "codex", "session-one", worktree)
-    activity = (tmp_path / "vault" / "Activity.md").read_text(encoding="utf-8")
-    assert "[Shared plan](plans/shared-plan.md) / `first` — First task" in activity
-    assert "owner codex" in activity
-    assert "`second`" not in activity  # blocked behind its dependency, so not ready yet
+    home = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
+    progress = _section(home, "## In progress")
+    assert "[Shared plan](plans/shared-plan.md) / `first` — First task" in progress
+    assert "owner codex" in progress
+    # `second` waits on its dependency, so it is neither in progress nor ready yet.
+    assert "`second`" not in progress + _section(home, "## Ready next")
 
     hub.block_task("shared-plan", "first", "codex", "session-one", "Waiting on access.")
-    activity = (tmp_path / "vault" / "Activity.md").read_text(encoding="utf-8")
-    assert "Waiting on access." in activity
+    home = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
+    assert "Waiting on access." in _section(home, "## Needs attention")
 
 
 def test_retired_knowledge_leaves_the_mirror_but_personal_notes_survive(
@@ -362,7 +369,7 @@ def test_retired_knowledge_leaves_the_mirror_but_personal_notes_survive(
     hub.add_knowledge("global", "kept", "Kept", "Body one.", "codex", "one")
     hub.add_knowledge("global", "dropped", "Dropped", "Body two.", "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
-    kept = tmp_path / "vault" / "knowledge" / "global" / "kept.md"
+    kept = tmp_path / "vault" / "knowledge" / "kept.md"
     kept.write_text(
         kept.read_text(encoding="utf-8").replace(
             PERSONAL_START, f"{PERSONAL_START}\nMy own annotation."
@@ -373,7 +380,7 @@ def test_retired_knowledge_leaves_the_mirror_but_personal_notes_survive(
     hub.retire_knowledge("global", "kept", "Obsolete.", "codex", "two")
     hub.retire_knowledge("global", "dropped", "Obsolete.", "codex", "two")
     result = bridge.render_all()
-    assert not (tmp_path / "vault" / "knowledge" / "global" / "dropped.md").exists()
+    assert not (tmp_path / "vault" / "knowledge" / "dropped.md").exists()
     assert "My own annotation." in kept.read_text(encoding="utf-8")
     assert any("kept.md" in warning for warning in result["warnings"])
     assert result["mirrored"]["knowledge"] == 0
@@ -385,7 +392,7 @@ def test_mirrored_knowledge_note_edits_are_not_imported(
     hub = Hub(local_hub, profile="default")
     hub.add_knowledge("global", "testing", "Testing", "Original body.", "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
-    note = tmp_path / "vault" / "knowledge" / "global" / "testing.md"
+    note = tmp_path / "vault" / "knowledge" / "testing.md"
     note.write_text(
         note.read_text(encoding="utf-8").replace("Original body.", "Rewritten by hand."),
         encoding="utf-8",
@@ -425,7 +432,7 @@ def test_home_is_an_overview_that_links_plans_projects_and_knowledge(
         "| [Shared plan](plans/shared-plan.md) | draft | 0/2 "
         "| [widgets](projects/acme-widgets.md) |" in home
     )
-    assert "[Deploys](knowledge/project/acme-widgets/deploys.md) · fact · [widgets]" in home
+    assert "[Deploys](knowledge/deploys.md) · fact · [widgets]" in home
     assert (
         "- [widgets](projects/acme-widgets.md) — 2 open of 2 plan tasks · 1 knowledge entry"
         in home
@@ -436,21 +443,19 @@ def test_home_is_an_overview_that_links_plans_projects_and_knowledge(
     assert "- `first`: planned — First task" in plan  # a draft's tasks are not claimable
     assert "  - [widgets](../projects/acme-widgets.md) · after `first`" in plan
     assert "## Related knowledge" in plan
-    assert "[Plan review](../knowledge/workspace/acme/shared-plan-review.md)" in plan
+    assert "[Plan review](../knowledge/shared-plan-review.md)" in plan
     assert "agops_tasks_total: 2" in plan and "- agops/plan" in plan
 
     project = (vault / "projects" / "acme-widgets.md").read_text(encoding="utf-8")
     assert "# widgets" in project and "aliases:\n- widgets" in project
     assert "- Repository: https://github.com/acme/widgets" in project
     assert "[Shared plan](../plans/shared-plan.md) · `second` — planned — Second task" in project
-    assert "[Deploys](../knowledge/project/acme-widgets/deploys.md)" in project
+    assert "[Deploys](../knowledge/deploys.md)" in project
     assert PERSONAL_START in project
 
-    knowledge = (vault / "knowledge" / "project" / "acme-widgets" / "deploys.md").read_text(
-        encoding="utf-8"
-    )
-    assert "- Scope: project [widgets](../../../projects/acme-widgets.md)" in knowledge
-    assert "- Related plans: [Shared plan](../../../plans/shared-plan.md)" in knowledge
+    knowledge = (vault / "knowledge" / "deploys.md").read_text(encoding="utf-8")
+    assert "- Scope: project [widgets](../projects/acme-widgets.md)" in knowledge
+    assert "- Related plans: [Shared plan](../plans/shared-plan.md)" in knowledge
     assert "### With tracked work" in (vault / "Projects.md").read_text(encoding="utf-8")
 
 
@@ -545,6 +550,38 @@ def test_agops_aliases_follow_the_title_and_user_aliases_survive(
     assert "- Shared plan" not in text
 
 
+def test_only_projects_with_tracked_work_or_personal_notes_get_a_note(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.register_project(make_project(tmp_path / "widgets"))
+    hub.register_project(
+        make_project(tmp_path / "gadgets", "https://github.com/acme/gadgets.git")
+    )
+    hub.add_knowledge(
+        "project:acme-widgets", "deploys", "Deploys", "Deploy from main only.", "codex", "one"
+    )
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    assert not (vault / "projects" / "acme-gadgets.md").exists()
+    projects = (vault / "Projects.md").read_text(encoding="utf-8")
+    assert "- gadgets `acme-gadgets`" in projects  # listed, but no note to link to
+
+    kept = vault / "projects" / "acme-widgets.md"
+    kept.write_text(
+        kept.read_text(encoding="utf-8").replace(PERSONAL_START, f"{PERSONAL_START}\nMine."),
+        encoding="utf-8",
+    )
+    hub.retire_knowledge("project:acme-widgets", "deploys", "Obsolete.", "codex", "two")
+    result = bridge.render_all()
+    text = kept.read_text(encoding="utf-8")
+    assert "Mine." in text and "agops_knowledge: 0" in text  # kept and still refreshed
+    assert result["warnings"] == []
+    assert "- [widgets](projects/acme-widgets.md) `acme-widgets`" in (
+        vault / "Projects.md"
+    ).read_text(encoding="utf-8")
+
+
 def test_unregistered_project_note_is_pruned_unless_it_has_personal_notes(
     local_hub: Path, fake_home: Path, tmp_path: Path
 ) -> None:
@@ -553,6 +590,8 @@ def test_unregistered_project_note_is_pruned_unless_it_has_personal_notes(
     hub.register_project(
         make_project(tmp_path / "gadgets", "https://github.com/acme/gadgets.git")
     )
+    hub.add_knowledge("project:acme-widgets", "a", "A", "Body.", "codex", "one")
+    hub.add_knowledge("project:acme-gadgets", "b", "B", "Body.", "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
     kept = tmp_path / "vault" / "projects" / "acme-widgets.md"
     kept.write_text(
@@ -565,3 +604,85 @@ def test_unregistered_project_note_is_pruned_unless_it_has_personal_notes(
     assert not (tmp_path / "vault" / "projects" / "acme-gadgets.md").exists()
     assert "Mine." in kept.read_text(encoding="utf-8")
     assert any("project unregistered" in warning for warning in result["warnings"])
+
+
+def test_nested_knowledge_notes_move_to_the_flat_folder_with_personal_notes(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.add_knowledge("global", "testing", "Testing", "Keep evidence.", "codex", "one")
+    hub.add_knowledge("workspace:acme", "review", "Review", "Reviewed.", "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    # Recreate what an earlier version left behind: nested notes, an old-style sidecar,
+    # a retired entry's empty folder, and the Activity index.
+    sidecar = bridge._sidecar(vault)
+    for key, scope_path in (("testing", "global"), ("review", "workspace/acme")):
+        flat = vault / "knowledge" / f"{key}.md"
+        nested = vault / "knowledge" / scope_path / f"{key}.md"
+        nested.parent.mkdir(parents=True)
+        text = flat.read_text(encoding="utf-8")
+        nested.write_text(
+            text.replace(PERSONAL_START, f"{PERSONAL_START}\nMy {key} note."), encoding="utf-8"
+        )
+        flat.unlink()
+        record = sidecar["knowledge"].pop(f"knowledge/{key}.md")
+        sidecar["knowledge"][f"knowledge/{scope_path}/{key}.md"] = {
+            "id": record["id"], "revisions": record["revisions"]
+        }
+    bridge._write_sidecar(vault, sidecar)
+    (vault / "knowledge" / "project" / "gone").mkdir(parents=True)
+    (vault / "knowledge" / "project" / "gone" / ".DS_Store").write_bytes(b"")
+    (vault / "knowledge" / "mine").mkdir()
+    (vault / "knowledge" / "mine" / "keep.md").write_text("Mine.\n", encoding="utf-8")
+    (vault / "Activity.md").write_text(
+        "# Activity\n\n_Back to [Home](Home.md)._\n\n## Claimed tasks\n", encoding="utf-8"
+    )
+
+    result = bridge.render_all()
+    assert result["warnings"] == []
+    assert "My testing note." in (vault / "knowledge" / "testing.md").read_text(encoding="utf-8")
+    assert "My review note." in (vault / "knowledge" / "review.md").read_text(encoding="utf-8")
+    folders = sorted(path.name for path in (vault / "knowledge").iterdir() if path.is_dir())
+    assert folders == ["mine"]  # agops folders are gone; a folder with a user file stays
+    assert not (vault / "Activity.md").exists()
+    assert set(bridge._sidecar(vault)["knowledge"]) == {
+        "knowledge/testing.md", "knowledge/review.md"
+    }
+
+
+def test_knowledge_names_stay_unique_and_notes_follow_a_rename(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.add_knowledge("global", "deploys", "Deploys", "Global rule.", "codex", "one")
+    hub.add_knowledge("workspace:acme", "shared-plan", "Plan notes", "About it.", "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    knowledge = tmp_path / "vault" / "knowledge"
+    assert (knowledge / "deploys.md").exists()
+    assert (knowledge / "shared-plan--workspace-acme.md").exists()  # the plan owns the name
+    note = knowledge / "deploys.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace(PERSONAL_START, f"{PERSONAL_START}\nMine."),
+        encoding="utf-8",
+    )
+
+    hub.add_knowledge(
+        "project:acme-widgets", "deploys", "Deploys", "Deploy from main only.", "codex", "two"
+    )
+    bridge.render_all()
+    assert not note.exists()
+    assert "Mine." in (knowledge / "deploys--global.md").read_text(encoding="utf-8")
+    assert (knowledge / "deploys--project-acme-widgets.md").exists()
+
+
+def test_hand_written_activity_note_is_left_alone(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    bridge = _connected(hub, tmp_path / "vault")
+    mine = tmp_path / "vault" / "Activity.md"
+    mine.write_text("# Activity\n\nMy own log.\n", encoding="utf-8")
+    bridge.render_all()
+    assert mine.read_text(encoding="utf-8") == "# Activity\n\nMy own log.\n"

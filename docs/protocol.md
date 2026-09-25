@@ -54,11 +54,13 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
 - `Plans.md`, an index grouped by active, draft, completed, and cancelled plans;
 - `plans/<plan-id>.md`, containing portable frontmatter, an editable fenced YAML definition,
   generated state, and an excluded personal-notes region;
-- `knowledge/<scope-path>/<key>.md`, one note per active knowledge entry;
-- `projects/<project-id>.md`, one note per registered project with its plan tasks and knowledge;
-- `Knowledge.md`, `Projects.md`, and `Activity.md`, generated indexes of the knowledge
-  entries, the registered projects grouped by workspace, and the current claims, blockers,
-  and ready tasks;
+- `knowledge/<key>.md`, one note per active knowledge entry in a single folder; the file is
+  `<key>--<slug(scope)>.md` when the key is shared by more than one active entry or equals a
+  plan id or a registered project id, so file names stay unique across the notes folder;
+- `projects/<project-id>.md`, one note per registered project that has plan tasks or knowledge,
+  or whose existing note carries personal notes, with its plan tasks and knowledge;
+- `Knowledge.md` and `Projects.md`, generated indexes of the knowledge entries and of every
+  registered project grouped by workspace (projects without a note are listed without a link);
 - `views/Plans.base`, `views/Knowledge.base`, and `views/Projects.base`, Obsidian Bases views
   that select notes by tag; and
 - `.agops-notes.json`, a format-versioned semantic baseline.
@@ -71,11 +73,17 @@ custom keys first, then `agops_*` keys, then `aliases` and `tags`; agops merges 
 `agops/project`) with the user's, and records its alias in `agops_aliases` so a rename replaces
 it. A file is written only when its rendered content differs.
 
-Knowledge, project, and activity files are a one-way mirror: the hub is the only writer and
+Knowledge and project files are a one-way mirror: the hub is the only writer and
 `notes sync` never imports them, so a knowledge note is corrected with `agops knowledge add`.
 Their personal-notes region is still preserved across renders. A retired or superseded entry, or
-a project that is no longer registered, leaves the mirror on the next render; if its note
-carries personal notes the file is kept and reported as a warning instead of deleted. A Bases
+a project that is no longer registered or has no tracked work, leaves the mirror on the next
+render; if its note carries personal notes the file is kept (and, for a registered project, still
+refreshed) instead of deleted, and an orphaned note is reported as a warning. The sidecar records
+each knowledge note's scope and key, so when an entry's file name changes the existing note is
+moved with its personal notes rather than recreated; notes that older versions nested under
+`knowledge/<scope-path>/` are moved the same way. Folders under `knowledge/` and `projects/`
+that a prune or move leaves empty (or holding only `.DS_Store`) are removed. A generated
+`Activity.md` from older versions is deleted; a hand-written one is left alone. A Bases
 view is written when missing or when it still matches the content agops last wrote (its hash
 is kept in the sidecar), so a view the user customized is never overwritten.
 

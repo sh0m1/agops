@@ -164,3 +164,11 @@ def test_setup_cli_rejects_local_with_remote() -> None:
     assert excinfo.value.code == 2
     args = cli.build_parser().parse_args(["setup", "--local"])
     assert args.local is True and args.remote is None
+
+
+def test_agops_cli_name_and_json_after_health_command() -> None:
+    parser = cli.build_parser()
+    assert parser.prog == "agops"
+    for command in ("doctor", "scan"):
+        assert parser.parse_args([command, "--json"]).json is True
+        assert parser.parse_args(["--json", command]).json is True

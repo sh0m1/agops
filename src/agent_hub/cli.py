@@ -39,15 +39,17 @@ def emit(value: Any, as_json: bool = False) -> None:
         print(value, end="" if value.endswith("\n") else "\n")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agent-hub")
+def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--repo", help="Agent Hub runtime clone")
     parser.add_argument("--json", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("sync")
-    commands.add_parser("doctor")
-    commands.add_parser("scan")
+    for name in ("doctor", "scan"):
+        commands.add_parser(name).add_argument(
+            "--json", action="store_true", default=argparse.SUPPRESS
+        )
     notes = commands.add_parser("notes")
     notes_commands = notes.add_subparsers(dest="notes_command", required=True)
     notes_connect = notes_commands.add_parser("connect")
@@ -213,7 +215,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    parser = build_parser()
+    command_name = Path(sys.argv[0]).name
+    parser = build_parser(command_name if command_name in {"agops", "agent-hub"} else "agops")
     args = parser.parse_args()
     try:
         result = dispatch(args)
@@ -223,7 +226,7 @@ def main() -> None:
         if args.json:
             emit({"ok": False, "error": str(exc)}, True)
         else:
-            print(f"agent-hub: {exc}", file=sys.stderr)
+            print(f"{parser.prog}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
 

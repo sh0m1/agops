@@ -7,7 +7,7 @@
 # setup is idempotent and remembers the remote.
 set -eu
 
-DEFAULT_REF="v0.6.1"
+DEFAULT_REF="main"
 REPO_URL="https://github.com/sh0m1/agops"
 
 REMOTE=""
@@ -19,14 +19,14 @@ KEEP_CLAUDE_MEMORY=0
 
 usage() {
     cat <<EOF
-Usage: install.sh [--remote <git-url> | --local] [--profile <name>] [--ref <tag>]
+Usage: install.sh [--remote <git-url> | --local] [--profile <name>] [--ref <ref>]
                   [--keep-claude-memory] [--dry-run]
 
   --remote <git-url>     Git remote to sync the memory repository with. Without it (and with
                          none remembered from an earlier run) the hub is local to this machine.
   --local                Keep the memory on this machine only; detaches and forgets any remote.
   --profile <name>       Hub profile to create or refresh (e.g. team, private).
-  --ref <tag>            agent-hub version to install (default: $DEFAULT_REF).
+  --ref <ref>            Git tag, branch, or commit to install (default: $DEFAULT_REF).
   --keep-claude-memory   Leave Claude Code's automatic memory enabled.
   --dry-run              Print the commands that would run; touch neither network nor disk.
 EOF
@@ -75,8 +75,8 @@ if ! command -v uv >/dev/null 2>&1; then
     fi
 fi
 
-# 2. agent-hub
-info "Installing agent-hub $REF"
+# 2. agops
+info "Installing agops $REF"
 run uv tool install --force "git+${REPO_URL}@${REF}"
 case ":$PATH:" in
     *":$LOCAL_BIN:"*) ;;
@@ -87,12 +87,12 @@ case ":$PATH:" in
         printf '  export PATH="$HOME/.local/bin:$PATH"\n\n'
         ;;
 esac
-if [ "$DRY_RUN" != 1 ] && ! command -v agent-hub >/dev/null 2>&1; then
-    fail "agent-hub was installed but is not on PATH; see the note above and re-run"
+if [ "$DRY_RUN" != 1 ] && ! command -v agops >/dev/null 2>&1; then
+    fail "agops was installed but is not on PATH; see the note above and re-run"
 fi
 
 # 3. setup
-info "Running agent-hub setup"
+info "Running agops setup"
 set --
 if [ -n "$REMOTE" ]; then
     set -- "$@" --remote "$REMOTE"
@@ -106,4 +106,4 @@ fi
 if [ "$KEEP_CLAUDE_MEMORY" = 1 ]; then
     set -- "$@" --keep-claude-memory
 fi
-run agent-hub setup "$@"
+run agops setup "$@"

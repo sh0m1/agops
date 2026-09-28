@@ -11,8 +11,7 @@ operations to clients that support MCP.
 agops was previously named Agent Hub. The Python package is still `agent_hub`, the runtime paths
 still live under `agent-hub`, and the environment variables still use the `AGENT_HUB_` prefix; the
 old `agent-hub` command remains as an alias for `agops`. The `agops` command ships from the first
-release after 0.6.1, so an install pinned to an older tag — including the tag `install.sh` currently
-defaults to — provides only `agent-hub`; every command below works under either name.
+revision after 0.6.1; installations pinned to 0.6.1 provide only `agent-hub`.
 
 ## Install
 
@@ -22,7 +21,7 @@ One command on a machine that already runs Claude Code and/or Codex CLI:
 curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh | sh
 ```
 
-It installs `uv` if missing, installs `agops` pinned to a released tag, and runs
+It installs `uv` if missing, installs `agops` from the current main branch, and runs
 `agops setup`, which ends with a summary of what was configured. The memory lives in a local
 Git repository at `~/.local/share/agent-hub/repo`; nothing leaves the machine.
 
@@ -35,9 +34,10 @@ curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh \
 ```
 
 To go back to a machine-local memory, `agops setup --local` detaches and forgets the remote
-(your local history is kept). Other flags: `--ref <tag>` to pick a version, `--keep-claude-memory`
-to leave Claude Code's automatic memory on, `--dry-run` to print the commands without touching
-anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agops@v0.6.1` then
+(your local history is kept). Other flags: `--ref <ref>` to pick a tag, branch, or commit,
+`--keep-claude-memory` to leave Claude Code's automatic memory on, and `--dry-run` to print
+the commands without touching
+anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agops@main` then
 `agops setup [--remote <url> | --local] [--profile NAME]`.
 
 `setup` adds bounded managed blocks to the Codex and Claude user instruction files and registers

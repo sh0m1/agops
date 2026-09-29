@@ -732,7 +732,11 @@ class Hub:
             for entry in self._current_knowledge():
                 if entry["scope_path"] == selected_scope:
                     scoped[entry["key"]] = entry
-        for entry in scoped.values():
+        # Workspace knowledge is the broadest set, so it is listed last and truncated first.
+        display_rank = {"global": 0, "project": 1, "workspace": 2}
+        for entry in sorted(
+            scoped.values(), key=lambda item: display_rank[item["scope_path"].split("/")[0]]
+        ):
             lines.append(f"- {entry['body'][:500]}")
         result = "\n".join(lines).strip() + "\n"
         encoded = result.encode("utf-8")
@@ -770,16 +774,22 @@ class Hub:
         return entries
 
     def _workspaces_for_project(self, project_id: str) -> list[str]:
-        root = self.root / "memory" / "workspaces"
-        if not root.exists():
-            return []
+        # `project register --workspace` records the workspace on the project itself;
+        # workspaces/*.yaml group definitions still count when present.
         matches: list[str] = []
-        for path in root.glob("*.yaml"):
-            definition = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            projects = definition.get("projects", [])
-            if any(project.get("id") == project_id for project in projects):
-                matches.append(str(definition["id"]))
-        return matches
+        project_file = self.root / "memory" / "projects" / f"{project_id}.yaml"
+        if project_file.exists():
+            definition = yaml.safe_load(project_file.read_text(encoding="utf-8")) or {}
+            if definition.get("workspace"):
+                matches.append(str(definition["workspace"]))
+        root = self.root / "memory" / "workspaces"
+        if root.exists():
+            for path in sorted(root.glob("*.yaml")):
+                definition = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                projects = definition.get("projects", [])
+                if any(project.get("id") == project_id for project in projects):
+                    matches.append(str(definition["id"]))
+        return list(dict.fromkeys(matches))
 
     def _worktree_identity(self, cwd: Path) -> tuple[str, str | None]:
         resolved = cwd.expanduser().resolve()

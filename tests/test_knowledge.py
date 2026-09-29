@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
+from conftest import project
 
 from agent_hub.hub import Hub
 from agent_hub.security import validate_content
@@ -15,6 +17,47 @@ def test_knowledge_is_searchable_and_in_brief(hub_repo: Path) -> None:
     )
     assert hub.search("concrete evidence")
     assert "Always preserve concrete test evidence" in hub.brief(Path("/tmp"))
+
+
+def test_brief_includes_knowledge_of_the_registered_workspace(
+    hub_repo: Path, tmp_path: Path
+) -> None:
+    hub = Hub(hub_repo)
+    widgets = project(tmp_path / "widgets")
+    hub.register_project(widgets, workspace="acme")
+    hub.add_knowledge("workspace:acme", "shared", "Shared", "Acme-wide rule.", "codex", "one")
+    hub.add_knowledge("workspace:other", "elsewhere", "Elsewhere", "Other rule.", "codex", "one")
+    brief = hub.brief(widgets)
+    assert "Acme-wide rule." in brief
+    assert "Other rule." not in brief
+    assert "Acme-wide rule." not in hub.brief(Path("/tmp"))
+
+
+def test_project_knowledge_survives_workspace_overflow(hub_repo: Path, tmp_path: Path) -> None:
+    hub = Hub(hub_repo)
+    widgets = project(tmp_path / "widgets")
+    hub.register_project(widgets, workspace="acme")
+    for index in range(30):
+        hub.add_knowledge("workspace:acme", f"wide-{index}", "Wide", "word " * 90, "codex", "one")
+    hub.add_knowledge(
+        "project:acme-widgets", "local", "Local", "Widgets-only rule.", "codex", "one"
+    )
+    brief = hub.brief(widgets)
+    assert "Widgets-only rule." in brief
+    assert brief.endswith("[brief truncated]\n")
+
+
+def test_brief_still_reads_workspace_definition_files(hub_repo: Path, tmp_path: Path) -> None:
+    hub = Hub(hub_repo)
+    widgets = project(tmp_path / "widgets")
+    hub.register_project(widgets)
+    workspaces = hub_repo / "memory" / "workspaces"
+    workspaces.mkdir(parents=True)
+    (workspaces / "acme.yaml").write_text(
+        yaml.safe_dump({"id": "acme", "projects": [{"id": "acme-widgets"}]}), encoding="utf-8"
+    )
+    hub.add_knowledge("workspace:acme", "shared", "Shared", "Acme-wide rule.", "codex", "one")
+    assert "Acme-wide rule." in hub.brief(widgets)
 
 
 def test_knowledge_revision_requires_explicit_supersession(hub_repo: Path) -> None:

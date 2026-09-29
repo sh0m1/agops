@@ -337,3 +337,20 @@ def test_install_skills_updates_a_stale_managed_file(fake_home: Path) -> None:
     assert result[str(manifest.parent)] == "installed"
     assert "Old content." not in manifest.read_text(encoding="utf-8")
     assert "managed-by: agops" in manifest.read_text(encoding="utf-8")
+
+
+def test_setup_rerun_keeps_an_existing_profiles_notes_target(
+    bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
+) -> None:
+    _, runner = recording_runner
+    runtime = tmp_path / "rt"
+    _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    config = config_path(fake_home)
+    data = json.loads(config.read_text(encoding="utf-8"))
+    vault = str(tmp_path / "vault")
+    data["profiles"]["default"]["notes_target"] = vault
+    config.write_text(json.dumps(data), encoding="utf-8")
+
+    _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    again = json.loads(config.read_text(encoding="utf-8"))
+    assert again["profiles"]["default"]["notes_target"] == vault

@@ -22,7 +22,16 @@ from .config import config_path, load_profiles, save_profiles
 from .git import remote_url
 from .ids import normalize_remote, slug
 from .security import validate_content
-from .state import PlanState, State, load_plan, load_state, parse_time, utc_now, validate_plan
+from .state import (
+    PlanState,
+    State,
+    TaskState,
+    load_plan,
+    load_state,
+    parse_time,
+    utc_now,
+    validate_plan,
+)
 
 if TYPE_CHECKING:
     from .hub import Hub
@@ -31,11 +40,13 @@ FORMAT_VERSION = 1
 SIDECAR = ".agops-notes.json"
 PERSONAL_START = "<!-- agops:personal:start -->"
 PERSONAL_END = "<!-- agops:personal:end -->"
+# The fenced definition block of the old note layout; read only to migrate such a note.
 DEFINITION_START = "<!-- agops:definition:start -->"
 DEFINITION_END = "<!-- agops:definition:end -->"
+DEFINITIONS_DIR = "plans/.definitions"
 STALE_DAYS = 7
 RETIRE_MIN_AGE_DAYS = 3
-AGOPS_BASE = """\
+LEGACY_AGOPS_BASE = """\
 formulas:
   idle: 'today() - agops_last_activity'
 properties:
@@ -151,6 +162,113 @@ views:
       - agops_plan_status
       - agops_created_at
 """
+AGOPS_BASE = """\
+formulas:
+  idle: 'today() - last_activity'
+properties:
+  status:
+    displayName: Status
+  health:
+    displayName: Health
+  workspace:
+    displayName: Workspace
+  progress:
+    displayName: Done
+  last_activity:
+    displayName: Last activity
+  formula.idle:
+    displayName: Idle
+views:
+  - type: table
+    name: Active plans
+    filters:
+      and:
+        - file.hasTag("agops/plan")
+        - 'status == "active"'
+    order:
+      - file.name
+      - workspace
+      - health
+      - progress
+      - last_activity
+      - formula.idle
+    sort:
+      - property: last_activity
+        direction: DESC
+  - type: table
+    name: Stalled
+    filters:
+      and:
+        - file.hasTag("agops/plan")
+        - 'status == "active"'
+        - or:
+            - 'health == "stalled"'
+            - 'health == "blocked"'
+    order:
+      - file.name
+      - workspace
+      - health
+      - progress
+      - last_activity
+      - formula.idle
+    sort:
+      - property: last_activity
+        direction: ASC
+  - type: table
+    name: By workspace
+    filters:
+      and:
+        - file.hasTag("agops/plan")
+        - 'status == "active"'
+    order:
+      - file.name
+      - health
+      - progress
+      - last_activity
+      - formula.idle
+    groupBy:
+      property: workspace
+      direction: ASC
+  - type: table
+    name: Recently completed
+    filters:
+      and:
+        - file.hasTag("agops/plan")
+        - 'status == "completed"'
+        - 'last_activity > today() - "14d"'
+    order:
+      - file.name
+      - workspace
+      - progress
+      - last_activity
+    sort:
+      - property: last_activity
+        direction: DESC
+  - type: table
+    name: Knowledge
+    filters:
+      and:
+        - file.hasTag("agops/knowledge")
+    order:
+      - file.name
+      - kind
+      - plan
+      - updated
+    groupBy:
+      property: scope
+      direction: ASC
+  - type: table
+    name: Plan-linked facts
+    filters:
+      and:
+        - file.hasTag("agops/knowledge")
+        - 'kind == "fact"'
+        - file.hasProperty("plan")
+    order:
+      - file.name
+      - plan
+      - updated
+"""
 _FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 _DEFINITION = re.compile(
     re.escape(DEFINITION_START) + r"\s*```ya?ml\n(.*?)```\s*" + re.escape(DEFINITION_END),
@@ -169,6 +287,24 @@ def _atomic_write(path: Path, content: str) -> None:
         raw.write(content)
         name = raw.name
     os.replace(name, path)
+
+
+def _write_if_changed(path: Path, content: str) -> None:
+    if not path.exists() or path.read_text(encoding="utf-8") != content:
+        _atomic_write(path, content)
+
+
+def _short(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else ([] if value is None else [value])
+
+
+def _definition_yaml(plan: dict[str, Any]) -> str:
+    return yaml.safe_dump(_definition(plan), sort_keys=False, allow_unicode=True)
 
 
 def _definition(plan: dict[str, Any]) -> dict[str, Any]:
@@ -592,24 +728,41 @@ class NotesBridge:
                     return candidate
         return None
 
-    def _note_definition(self, path: Path) -> dict[str, Any]:
-        # Imports accept only the full hybrid-note envelope, not an isolated YAML fence.
-        self._frontmatter_and_personal(path)
-        text = path.read_text(encoding="utf-8")
-        match = _DEFINITION.search(text)
-        if not match:
-            raise ValueError(f"Missing managed YAML definition in {path}")
+    def _definition_path(self, target: Path, plan_id: str) -> Path:
+        return target / DEFINITIONS_DIR / f"{plan_id}.yaml"
+
+    def _read_definition(
+        self, target: Path, plan_id: str, note: Path | None
+    ) -> tuple[dict[str, Any], str] | None:
+        """A plan's editable definition as (data, yaml text), or None if it has none yet.
+
+        The source is `plans/.definitions/<id>.yaml`; a note that still has the old fenced block
+        is the fallback, so a note from before that layout keeps any unsynced edit.
+        """
+        note = note if note is not None and note.exists() else None
+        if note is not None:
+            # Imports need an intact note envelope, not just an isolated definition.
+            self._frontmatter_and_personal(note)
+        source = self._definition_path(target, plan_id)
+        if source.is_symlink() or not source.resolve().is_relative_to(target.resolve()):
+            raise ValueError(f"Definition for {plan_id} must be a regular file inside the vault")
+        if source.is_file():
+            raw = source.read_text(encoding="utf-8")
+        elif note is not None and (match := _DEFINITION.search(note.read_text(encoding="utf-8"))):
+            source, raw = note, match.group(1)
+        else:
+            return None
         try:
-            data = yaml.safe_load(match.group(1))
+            data = yaml.safe_load(raw)
         except yaml.YAMLError as exc:
-            raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
+            raise ValueError(f"Invalid YAML in {source}: {exc}") from exc
         if not isinstance(data, dict):
-            raise ValueError(f"Definition in {path} must be a YAML object")
-        validate_content(match.group(1), path.name)
+            raise ValueError(f"Definition in {source} must be a YAML object")
+        validate_content(raw, source.name)
         validate_plan(data, self.hub.policy())
-        if data.get("id") != path.stem:
-            raise ValueError(f"Plan ID in {path} must match its filename")
-        return data
+        if data.get("id") != plan_id:
+            raise ValueError(f"Plan ID in {source} must match {plan_id}")
+        return data, raw
 
     def _render_plan(
         self,
@@ -621,84 +774,115 @@ class NotesBridge:
     ) -> str:
         custom, personal = self._frontmatter_and_personal(path)
         latest = int(plan["revision"])
-        raw_tags = custom.get("tags")
-        custom_tags = (
-            raw_tags if isinstance(raw_tags, list) else ([] if raw_tags is None else [raw_tags])
-        )
-        front = {
-            **custom,
-            "agops_id": plan["id"],
-            "agops_latest_revision": latest,
-            "agops_approved_revision": state.approved_revision,
-            "agops_status": _status(state),
-            "agops_pending_approval": bool(
-                state.approved_revision and latest > state.approved_revision
-            ),
-            "agops_title": plan["title"],
-            "agops_workspace": overview["workspace"],
-            "agops_projects": overview["projects"],
-            "agops_health": overview["health"],
-        }
-        created = _date_only(state.first_event_at)
-        if created is not None:
-            front["agops_created"] = created
+        status = _status(state)
+        now = utc_now()
         last_activity = _date_only(state.last_event_at)
+        progress = f"{overview['tasks_done']}/{overview['tasks_total']}"
+        owned = {"tags", "status", "health", "workspace", "progress", "last_activity"}
+        front: dict[str, Any] = {
+            "tags": list(dict.fromkeys([*_as_list(custom.get("tags")), "agops", "agops/plan"])),
+            "status": status,
+            "health": overview["health"],
+            "workspace": overview["workspace"],
+            "progress": progress,
+        }
         if last_activity is not None:
-            front["agops_last_activity"] = last_activity
-        completed = _date_only(state.completed_at)
-        if completed is not None:
-            front["agops_completed"] = completed
-        front.update(
-            {
-                "agops_tasks": overview["tasks_total"],
-                "agops_tasks_done": overview["tasks_done"],
-                "agops_tasks_open": overview["tasks_open"],
-                "agops_tasks_blocked": overview["tasks_blocked"],
-                "tags": list(dict.fromkeys([*custom_tags, "agops"])),
-            }
-        )
+            front["last_activity"] = last_activity
+        front.update({key: value for key, value in custom.items() if key not in owned})
         managed = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).rstrip()
-        definition = yaml.safe_dump(_definition(plan), sort_keys=False, allow_unicode=True).rstrip()
-        lines = [
-            "---", managed, "---", "", f"# {plan['title']}", "", DEFINITION_START,
-            "```yaml", definition, "```", DEFINITION_END, "", "## Agops state", "",
-            f"- Status: {_status(state)}",
-            f"- Latest revision: {latest}",
-            f"- Approved revision: {state.approved_revision or 'none'}",
-        ]
-        if plan.get("goal"):
-            lines.extend(["", "## Goal", "", str(plan["goal"])])
-        pending = state.approved_revision and latest > state.approved_revision
-        heading = "## Execution tasks"
-        if pending:
-            heading += f" (approved revision {state.approved_revision})"
-        lines.extend(["", heading, ""])
-        if pending:
-            lines.append(
-                f"_Revision {latest} is pending approval; its new tasks are not executable._"
-            )
-            lines.append("")
-        for task in execution_plan["tasks"]:
+
+        summary = [overview["health"], overview["workspace"], f"{progress} done"]
+        if last_activity is not None:
+            summary.append(f"last {last_activity.isoformat()}")
+        lines = ["---", managed, "---", "", f"# {plan['title']}", "", " · ".join(summary), ""]
+        goal = str(plan.get("goal") or "").strip()
+        if goal:
+            separator = "\n\n" if "\n" in goal else " "
+            lines.extend([f"**Goal:**{separator}{goal}", ""])
+
+        tasks = execution_plan["tasks"]
+        done = [t for t in tasks if (state.tasks.get(t["id"]) or TaskState()).status == "completed"]
+        done_ids = {task["id"] for task in done}
+        open_tasks = [task for task in tasks if task["id"] not in done_ids]
+        finished = status in {"completed", "cancelled"}
+
+        lines.extend(["## Needs you", ""])
+        needs: list[str] = []
+        if not finished and (not state.approved_revision or latest > state.approved_revision):
+            needs.append(f"- Revision {latest} is waiting for approval")
+        for item in overview["blocked"]:
+            needs.append(f"- Blocked: `{item['task']}` — {_short(item['reason'], 160)}")
+        lines.extend(needs or ["_Nothing._"])
+
+        lines.extend(["", f"## Open ({len(open_tasks)})", ""])
+        for task in open_tasks:
             current = state.tasks.get(task["id"])
-            state_text = current.status if current else "ready"
-            owner = f" — {current.owner}" if current and current.owner else ""
-            lines.append(f"- `{task['id']}`: {state_text}{owner} — {task['title']}")
+            waiting = [dep for dep in task.get("depends_on", []) if dep not in done_ids]
+            if current and current.status == "blocked":
+                detail = "blocked" + (f": {_short(current.reason, 100)}" if current.reason else "")
+            elif current and current.actively_claimed(now):
+                detail = f"claimed by {current.owner or 'unknown'}"
+            elif not state.approved_revision:
+                detail = "draft"
+            elif waiting:
+                detail = "waiting on " + ", ".join(f"`{dep}`" for dep in waiting)
+            else:
+                detail = "ready"
+            lines.append(f"- [ ] `{task['id']}` {task['title']} — {detail}")
             if current and current.summary:
-                lines.append(f"  - Latest: {current.summary}")
-            if current and current.evidence:
-                lines.append("  - Evidence: " + "; ".join(current.evidence))
-        if plan.get("acceptance_criteria"):
-            lines.extend(["", "## Acceptance criteria", ""])
-            for criterion in plan["acceptance_criteria"]:
-                text = (
-                    criterion.get("text", criterion) if isinstance(criterion, dict) else criterion
-                )
-                lines.append(f"- {text}")
-        lines.extend(["", "## Personal notes", "", PERSONAL_START])
+                lines.append(f"  - {_short(current.summary, 160)}")
+        if not open_tasks:
+            lines.append("_Nothing open._")
+
+        lines.extend(["", f"## Done ({len(done)})", ""])
+        if done:
+            lines.append(f"> [!done]- {len(done)} tasks")
+            lines.extend(f"> - `{task['id']}` {task['title']}" for task in done)
+        else:
+            lines.append("_None yet._")
+
+        criteria = plan.get("acceptance_criteria") or []
+        if criteria:
+            lines.extend(["", "## Acceptance", ""])
+            for criterion in criteria:
+                if isinstance(criterion, dict):
+                    label = f"**{criterion['id']}** " if criterion.get("id") else ""
+                    lines.append(f"- {label}{criterion.get('text', '')}".rstrip())
+                else:
+                    lines.append(f"- {criterion}")
+
+        lines.extend(["", "## My notes", "", PERSONAL_START])
         if personal:
             lines.append(personal)
-        lines.extend([PERSONAL_END, ""])
+        definition = f"{DEFINITIONS_DIR}/{plan['id']}.yaml"
+        footer = (
+            f"_Generated by agops. Edit the plan in `{definition}`, then run `agops notes sync`._"
+            if not finished
+            else f"_Generated by agops. This plan is finished; `{definition}` is history only._"
+        )
+        lines.extend([PERSONAL_END, "", "---", footer, ""])
         return "\n".join(lines)
+
+    @staticmethod
+    def _plan_meta(
+        plan: dict[str, Any], state: PlanState, overview: dict[str, Any]
+    ) -> dict[str, Any]:
+        """What the notes no longer show in frontmatter, kept in the sidecar for bookkeeping."""
+
+        def day(value: str | None) -> str | None:
+            found = _date_only(value)
+            return found.isoformat() if found else None
+
+        return {
+            "title": plan["title"],
+            "latest_revision": int(plan["revision"]),
+            "approved_revision": state.approved_revision,
+            "pending_approval": overview["pending_approval"],
+            "projects": overview["projects"],
+            "created": day(state.first_event_at),
+            "completed": day(state.completed_at),
+            "created_by": plan.get("created_by"),
+        }
 
     def _index(self, overviews: list[dict[str, Any]]) -> str:
         groups: dict[str, list[dict[str, Any]]] = {
@@ -855,12 +1039,26 @@ class NotesBridge:
         )
         return "\n".join(lines)
 
-    def _ensure_base(self, target: Path) -> None:
-        """Write the Obsidian Bases file once; never overwrite a user's customized copy."""
+    def _ensure_base(self, target: Path) -> list[str]:
+        """Write the Obsidian Bases file once; never overwrite a user's customized copy.
+
+        An untouched copy of the previous default is upgraded; a customized one that still uses
+        the old `agops_*` properties is left alone and reported.
+        """
         path = target / "agops.base"
-        if path.exists():
-            return
-        _atomic_write(path, AGOPS_BASE)
+        if not path.exists():
+            _atomic_write(path, AGOPS_BASE)
+            return []
+        current = path.read_text(encoding="utf-8")
+        if current == LEGACY_AGOPS_BASE:
+            _atomic_write(path, AGOPS_BASE)
+        elif "agops_" in current:
+            return [
+                "agops.base still filters on the old agops_* properties, which notes no longer "
+                "carry; update your views to tags/status/health/workspace/progress/last_activity "
+                "(or delete the file to get the new default)"
+            ]
+        return []
 
     # --- Read-only mirrors: knowledge, projects, and current agent activity -------------
     #
@@ -901,48 +1099,38 @@ class NotesBridge:
         return sorted(entries, key=lambda entry: (entry["scope"], entry["key"]))
 
     def _render_knowledge(
-        self,
-        entry: dict[str, Any],
-        path: Path,
-        projects: list[dict[str, Any]],
-        plan_id: str | None,
-        plan_status: str | None,
+        self, entry: dict[str, Any], path: Path, plan_id: str | None
     ) -> str:
         custom, personal = self._frontmatter_and_personal(path)
-        raw_tags = custom.get("tags")
-        custom_tags = (
-            raw_tags if isinstance(raw_tags, list) else ([] if raw_tags is None else [raw_tags])
-        )
-        front = {
-            **custom,
-            "agops_knowledge_id": entry["id"],
-            "agops_key": entry["key"],
-            "agops_scope": entry["scope"],
-            "agops_workspace": _knowledge_workspace(entry["scope"], projects),
-            "agops_kind": entry["kind"],
-            "agops_revisions": entry["revisions"],
-            "agops_created_at": entry["created_at"],
-            "agops_created_by": entry["created_by"],
+        owned = {"tags", "kind", "scope", "updated", "plan"}
+        front: dict[str, Any] = {
+            "tags": list(
+                dict.fromkeys([*_as_list(custom.get("tags")), "agops", "agops/knowledge"])
+            ),
+            "kind": entry["kind"],
+            "scope": entry["scope"],
         }
+        updated = _date_only(entry["created_at"])
+        if updated is not None:
+            front["updated"] = updated
         if plan_id:
-            front["agops_plan"] = plan_id
-            front["agops_plan_status"] = plan_status
-        front["tags"] = list(dict.fromkeys([*custom_tags, "agops", "agops/knowledge"]))
+            front["plan"] = f"[[{plan_id}]]"
+        front.update({key: value for key, value in custom.items() if key not in owned})
         managed = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).rstrip()
-        lines = [
-            "---", managed, "---", "", f"# {entry['title']}", "",
-            f"_Mirrored from the agops hub ({entry['scope']} · {entry['kind']}). "
-            "Edits outside the personal-notes region are overwritten; use "
-            "`agops knowledge add` to change the entry._",
-        ]
-        if plan_id:
-            lines.append(f"_Plan: [[{plan_id}]] ({plan_status})_")
-        lines.extend(
-            ["", entry["body"] or "_No body._", "", "## Personal notes", "", PERSONAL_START]
-        )
+        body = entry["body"] or "_No body._"
+        lines = ["---", managed, "---", "", f"# {entry['title']}", "", body]
+        lines.extend(["", "## My notes", "", PERSONAL_START])
         if personal:
             lines.append(personal)
-        lines.extend([PERSONAL_END, ""])
+        lines.extend(
+            [
+                PERSONAL_END,
+                "",
+                "---",
+                "_Mirrored from agops. Change it with `agops knowledge add`._",
+                "",
+            ]
+        )
         return "\n".join(lines)
 
     def _knowledge_index(self, entries: list[dict[str, Any]]) -> str:
@@ -1058,14 +1246,24 @@ class NotesBridge:
             plan_id = link_plan(entry, plan_ids)
             plan_status = _status(state.plans[plan_id]) if plan_id else None
             try:
-                rendered = self._render_knowledge(entry, path, projects, plan_id, plan_status)
+                rendered = self._render_knowledge(entry, path, plan_id)
             except ValueError as exc:
                 warnings.append(f"knowledge {entry['scope']}/{entry['key']}: {exc}")
                 continue
             if not path.exists() or path.read_text(encoding="utf-8") != rendered:
                 _atomic_write(path, rendered)
                 written += 1
-            known[relative] = {"id": entry["id"], "revisions": entry["revisions"]}
+            known[relative] = {
+                "id": entry["id"],
+                "key": entry["key"],
+                "scope": entry["scope"],
+                "workspace": _knowledge_workspace(entry["scope"], projects),
+                "revisions": entry["revisions"],
+                "created_at": entry["created_at"],
+                "created_by": entry["created_by"],
+                "plan": plan_id,
+                "plan_status": plan_status,
+            }
         # A retired or superseded entry leaves the mirror. Personal notes are never discarded:
         # such a note is kept in place and reported instead.
         for relative in sorted(set(known) - seen):
@@ -1110,14 +1308,15 @@ class NotesBridge:
             plan = load_plan(self.hub.root, plan_id)
             hub_hash = definition_hash(plan)
             plan_state = state.plans.get(plan_id, PlanState(plan_id))
-            if path is None:
+            try:
+                found = self._read_definition(target, plan_id, path)
+            except ValueError as exc:
+                output.append({"id": plan_id, "status": "invalid", "error": str(exc)})
+                continue
+            if found is None:
                 value = "missing"
             else:
-                try:
-                    note_hash = definition_hash(self._note_definition(path))
-                except ValueError as exc:
-                    output.append({"id": plan_id, "status": "invalid", "error": str(exc)})
-                    continue
+                note_hash = definition_hash(found[0])
                 base_hash = baseline.get("definition_hash") if baseline else None
                 hub_changed = base_hash != hub_hash
                 note_changed = base_hash != note_hash
@@ -1143,18 +1342,27 @@ class NotesBridge:
         }
 
     def _safe_to_move(
-        self, source: Path, destination: Path, baseline: dict[str, Any], hub_hash: str, force: bool
+        self,
+        target: Path,
+        plan_id: str,
+        source: Path,
+        destination: Path,
+        baseline: dict[str, Any],
+        hub_hash: str,
+        force: bool,
     ) -> bool:
-        """Move only a parseable, unedited note (or one being force-resolved) to a free path."""
+        """Move only a note whose definition has no unsynced edit (or one being force-resolved)."""
         if destination.exists():
             return False
         if force:
             return True
         try:
-            note_hash = definition_hash(self._note_definition(source))
+            found = self._read_definition(target, plan_id, source)
         except ValueError:
             return False
-        return note_hash in {baseline.get("definition_hash"), hub_hash}
+        if found is None:
+            return True
+        return definition_hash(found[0]) in {baseline.get("definition_hash"), hub_hash}
 
     def render_all(
         self, force: bool = False, plan_ids: set[str] | None = None
@@ -1190,7 +1398,9 @@ class NotesBridge:
             hub_hash = definition_hash(plan)
             baseline = sidecar["plans"].get(plan_id, {})
             if existing is not None and existing != desired:
-                if self._safe_to_move(existing, desired, baseline, hub_hash, force):
+                if self._safe_to_move(
+                    target, plan_id, existing, desired, baseline, hub_hash, force
+                ):
                     desired.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(existing, desired)
                     path = desired
@@ -1200,34 +1410,49 @@ class NotesBridge:
                         f"{plan_id}: left at {existing.relative_to(target).as_posix()} "
                         f"(not moved to {desired.relative_to(target).as_posix()})"
                     )
-            should_write = force or not path.exists()
-            note: dict[str, Any] | None = None
-            note_changed = False
-            if path.exists() and not force:
+            # The note is generated output; the definition file is the editable part, so an
+            # unsynced edit (or a definition still in an old note's fenced block) is kept.
+            should_write = True
+            edit_text: str | None = None
+            if not force:
                 try:
-                    note = self._note_definition(path)
-                    note_hash = definition_hash(note)
-                    note_changed = baseline.get("definition_hash") != note_hash
-                    if not note_changed or note_hash == hub_hash:
-                        should_write = True
+                    found = self._read_definition(target, plan_id, path)
                 except ValueError as exc:
                     warnings.append(f"{plan_id}: {exc}")
                     should_write = False
+                else:
+                    if found is not None:
+                        note_hash = definition_hash(found[0])
+                        if baseline.get("definition_hash") != note_hash and note_hash != hub_hash:
+                            edit_text = found[1]
             if should_write:
                 rendered = self._render_plan(plan, plan_state, path, execution_plan, overview)
-                _atomic_write(path, rendered)
+                definition_path = self._definition_path(target, plan_id)
+                if edit_text is None:
+                    _write_if_changed(definition_path, _definition_yaml(plan))
+                elif not definition_path.exists():
+                    _atomic_write(definition_path, edit_text)
+                _write_if_changed(path, rendered)
                 written.append(plan_id)
-                sidecar["plans"][plan_id] = {
-                    "definition_hash": hub_hash,
-                    "state_hash": _state_hash(plan_state),
-                    "revision": int(plan["revision"]),
-                }
+                meta = self._plan_meta(plan, plan_state, overview)
+                if edit_text is None:
+                    sidecar["plans"][plan_id] = {
+                        **meta,
+                        "definition_hash": hub_hash,
+                        "state_hash": _state_hash(plan_state),
+                        "revision": int(plan["revision"]),
+                    }
+                elif plan_id in sidecar["plans"]:
+                    # Keep the baseline the edit is measured against.
+                    sidecar["plans"][plan_id].update(
+                        {**meta, "state_hash": _state_hash(plan_state)}
+                    )
             if path.exists() and plan_id in sidecar["plans"]:
                 sidecar["plans"][plan_id]["path"] = path.relative_to(target).as_posix()
         _prune_empty_dirs(target / "plans")
         _atomic_write(target / "Plans.md", self._index(overviews))
         _atomic_write(target / "Home.md", self._home(overviews, now))
-        self._ensure_base(target)
+        warnings.extend(self._ensure_base(target))
         mirrored, mirror_warnings = self._mirror(target, sidecar, state)
         warnings.extend(mirror_warnings)
         self._write_sidecar(target, sidecar)
@@ -1255,17 +1480,18 @@ class NotesBridge:
             if _status(plan_state) in {"completed", "cancelled"}:
                 continue
             path = self._locate_plan(target, sidecar, plan_id)
-            if path is None:
+            try:
+                found = self._read_definition(target, plan_id, path)
+            except ValueError as exc:
+                invalid.append({"id": plan_id, "error": str(exc)})
+                continue
+            if found is None:
                 continue
             baseline = sidecar["plans"].get(plan_id)
             if baseline is None:
                 conflicts.append(plan_id)
                 continue
-            try:
-                note = self._note_definition(path)
-            except ValueError as exc:
-                invalid.append({"id": plan_id, "error": str(exc)})
-                continue
+            note = found[0]
             current = load_plan(self.hub.root, plan_id)
             note_hash, current_hash = definition_hash(note), definition_hash(current)
             base_hash = baseline["definition_hash"]
@@ -1290,10 +1516,11 @@ class NotesBridge:
         if target is None:
             raise ValueError("No notes target is connected")
         path = self._locate_plan(target, self._sidecar(target), plan_id)
-        if path is None:
+        found = self._read_definition(target, plan_id, path)
+        if found is None:
             raise ValueError(f"Missing note for plan: {plan_id}")
         if take == "notes":
-            note = self._note_definition(path)
+            note = found[0]
             current = load_plan(self.hub.root, plan_id)
             state = load_state(self.hub.root).plans.get(plan_id, PlanState(plan_id))
             if _status(state) in {"completed", "cancelled"}:

@@ -1042,22 +1042,28 @@ class NotesBridge:
     def _ensure_base(self, target: Path) -> list[str]:
         """Write the Obsidian Bases file once; never overwrite a user's customized copy.
 
-        An untouched copy of the previous default is upgraded; a customized one that still uses
-        the old `agops_*` properties is left alone and reported.
+        A copy that still uses the old `agops_*` properties cannot match any note, so it is kept
+        as `agops.old.base` (never overwritten) and replaced by the new default.
         """
         path = target / "agops.base"
         if not path.exists():
             _atomic_write(path, AGOPS_BASE)
             return []
         current = path.read_text(encoding="utf-8")
-        if current == LEGACY_AGOPS_BASE:
+        if "agops_" not in current:
+            return []
+        if current != LEGACY_AGOPS_BASE:
+            backup = target / "agops.old.base"
+            if backup.exists():
+                return [
+                    "agops.base still uses the old agops_* properties and agops.old.base already "
+                    "exists; update your views to tags/status/health/workspace/progress/"
+                    "last_activity"
+                ]
+            os.replace(path, backup)
             _atomic_write(path, AGOPS_BASE)
-        elif "agops_" in current:
-            return [
-                "agops.base still filters on the old agops_* properties, which notes no longer "
-                "carry; update your views to tags/status/health/workspace/progress/last_activity "
-                "(or delete the file to get the new default)"
-            ]
+            return ["agops.base used the old agops_* properties; kept it as agops.old.base"]
+        _atomic_write(path, AGOPS_BASE)
         return []
 
     # --- Read-only mirrors: knowledge, projects, and current agent activity -------------

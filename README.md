@@ -225,8 +225,8 @@ days, `done`, `cancelled`, or `draft`), plus its workspace and progress, so the 
 sorts and filters instead of just listing. `agops.base` is an Obsidian Bases file with ready-made
 views (active, stalled, by workspace, recently completed, knowledge, plan-linked facts) that
 filter on the `agops/plan` and `agops/knowledge` tags; agops writes it once and never overwrites
-your edits (an untouched copy of the old `agops_*` default is upgraded; a customized one is left
-alone with a warning to update its views). `agops notes review` prints a read-only JSON triage
+your edits (a copy that still uses the old `agops_*` properties is kept as `agops.old.base` and
+replaced by the new default). `agops notes review` prints a read-only JSON triage
 report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
 `agops-notes` skill to act on. Add `keep: true` to a knowledge note's frontmatter to mark it kept;
 `agops notes review` then reports it as `keep` instead of flagging it again.

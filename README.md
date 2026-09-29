@@ -191,29 +191,42 @@ The folder holds the whole working picture: `Plans.md` and the plan notes (`plan
 it has no unsynced edit),
 `knowledge/<scope>/<key>.md` with a `Knowledge.md` index for the knowledge entries, `Projects.md`
 for the registered repositories by workspace, and `Activity.md` for who has claimed what, what is
-blocked, and what is ready next. Only plan notes are two-way; knowledge, projects, and activity are
+blocked, and what is ready next. Only plans are two-way; knowledge, projects, and activity are
 a read-only mirror of the hub, so change knowledge with `agops knowledge add` rather than in the
-vault. Personal notes are preserved in every note.
+vault. Personal notes (the "My notes" section) are preserved in every note.
 
-Agops exports after successful hub changes and after `agops sync`. Editing a plan note is safe but
-intentional: `agops notes sync` validates the fenced YAML and creates a new **unapproved** plan
-revision. Personal notes and non-`agops_*` frontmatter are retained and never imported. Finished
+A plan note is a short page: goal, what needs you, open tasks, done tasks (folded), acceptance.
+The plan definition itself lives in a hidden file, `plans/.definitions/<id>.yaml`; edit that,
+not the note. Agops owns these plain frontmatter keys and rewrites them on every export: plan
+notes `tags`, `status`, `health`, `workspace`, `progress`, `last_activity`; knowledge notes
+`tags`, `kind`, `scope`, `updated`, `plan`. Your own keys and tags (such as `keep: true`) are
+kept. Ids, revisions and hashes are in `.agops-notes.json`. Notes from the older layout (an
+`agops_*` frontmatter and a YAML block in the note) are converted on the next sync; an unsynced
+edit in the old block moves to the `.yaml` file.
+
+Agops exports after successful hub changes and after `agops sync`. Editing a plan definition is safe but
+intentional: `agops notes sync` validates `plans/.definitions/<id>.yaml` and creates a new
+**unapproved** plan revision. Personal notes and your own frontmatter are retained and never
+imported. Finished
 or cancelled plans are history only. If agops and a note changed the same definition, resolve it
 deliberately: `agops notes resolve PLAN --take notes|agops` (type the plan id, or add `--yes`).
 `agops notes disconnect` only forgets the folder; it never deletes notes.
 
 The sidecar is bound to its hub, so a folder belonging to another profile cannot be connected by
 mistake. A notes write failure is an additive `notes_warning`: the hub event still succeeds and the
-next sync retries it. When a newer revision is awaiting approval, the note clearly separates that
-definition from the executable tasks of the approved revision.
+next sync retries it. When a newer revision is awaiting approval, the note lists the tasks of the
+approved revision and says "Revision N is waiting for approval"; the `.yaml` file holds the newer
+definition.
 
 `Home.md` is the overview: a one-line tally, what needs you (pending approvals, blocked tasks),
 active plans sorted by last activity, and a link to recently completed work. Every plan note and
-`Plans.md` carry a computed `agops_health` (`live`, `waiting`, `blocked`, `stalled` after 7 idle
-days, `done`, `cancelled`, or `draft`), plus its workspace, projects, and task counts, so the vault
+`Plans.md` carry a computed `health` (`live`, `waiting`, `blocked`, `stalled` after 7 idle
+days, `done`, `cancelled`, or `draft`), plus its workspace and progress, so the vault
 sorts and filters instead of just listing. `agops.base` is an Obsidian Bases file with ready-made
-views (active, stalled, by workspace, recently completed, knowledge, retire candidates); agops
-writes it once and never overwrites your edits. `agops notes review` prints a read-only JSON triage
+views (active, stalled, by workspace, recently completed, knowledge, plan-linked facts) that
+filter on the `agops/plan` and `agops/knowledge` tags; agops writes it once and never overwrites
+your edits (an untouched copy of the old `agops_*` default is upgraded; a customized one is left
+alone with a warning to update its views). `agops notes review` prints a read-only JSON triage
 report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
 `agops-notes` skill to act on. Add `keep: true` to a knowledge note's frontmatter to mark it kept;
 `agops notes review` then reports it as `keep` instead of flagging it again.

@@ -12,6 +12,8 @@ from conftest import project as make_project
 from agent_hub.config import config_path
 from agent_hub.hub import Hub
 from agent_hub.notes import (
+    AGOPS_BASE,
+    LEGACY_AGOPS_BASE,
     PERSONAL_START,
     RETIRE_MIN_AGE_DAYS,
     NotesBridge,
@@ -31,6 +33,34 @@ def _connected(hub: Hub, target: Path) -> NotesBridge:
     return bridge
 
 
+def _definition_file(root: Path, plan_id: str = "shared-plan") -> Path:
+    return root / "vault" / "plans" / ".definitions" / f"{plan_id}.yaml"
+
+
+def _frontmatter(text: str) -> dict:
+    return yaml.safe_load(text.split("---\n", 2)[1])
+
+
+def _legacy_note(bridge: NotesBridge, root: Path, goal: str | None = None) -> Path:
+    """Rewrite a freshly rendered plan note in the old layout: agops_* keys and a YAML fence."""
+    note = root / "vault" / "plans" / "active" / "shared-plan.md"
+    definition = _definition_file(root)
+    raw = definition.read_text(encoding="utf-8")
+    if goal:
+        raw = raw.replace("Let agents cooperate.", goal)
+    definition.unlink()
+    definition.parent.rmdir()
+    note.write_text(
+        "---\nmine: 1\nagops_id: shared-plan\nagops_status: draft\nagops_tasks: 2\n"
+        "tags:\n- agops\n---\n\n# Shared plan\n\n"
+        f"<!-- agops:definition:start -->\n```yaml\n{raw}```\n<!-- agops:definition:end -->\n\n"
+        "## Agops state\n\n- Status: draft\n\n## Personal notes\n\n"
+        f"{PERSONAL_START}\nMy old thought.\n<!-- agops:personal:end -->\n",
+        encoding="utf-8",
+    )
+    return note
+
+
 def test_connect_renders_portable_hybrid_notes(
     local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
 ) -> None:
@@ -40,13 +70,25 @@ def test_connect_renders_portable_hybrid_notes(
 
     note = tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
     text = note.read_text(encoding="utf-8")
-    assert "agops_id: shared-plan" in text
-    assert "<!-- agops:definition:start -->" in text
+    assert "agops_" not in text and "```" not in text
     assert "<!-- agops:personal:start -->" in text
+    assert "agops:definition" not in text
+    for heading in ("# Shared plan", "**Goal:** Let agents cooperate.", "## Needs you",
+                    "## Open (2)", "## Done (0)", "## Acceptance", "## My notes"):
+        assert heading in text
+    assert "- **tested** The implementation is tested." in text
+    assert "- [ ] `first` First task — draft" in text
+    assert "- Revision 1 is waiting for approval" in text
+    assert "`plans/.definitions/shared-plan.yaml`" in text
+    assert "write_scope" not in text
+    definition = yaml.safe_load(_definition_file(tmp_path).read_text(encoding="utf-8"))
+    assert definition["id"] == "shared-plan" and len(definition["tasks"]) == 2
+    assert "revision" not in definition
     plans_text = (tmp_path / "vault" / "Plans.md").read_text()
     assert "[Shared plan](plans/active/shared-plan.md)" in plans_text
     sidecar = json.loads((tmp_path / "vault" / ".agops-notes.json").read_text())
     assert sidecar["format_version"] == 1
+    assert sidecar["plans"]["shared-plan"]["latest_revision"] == 1
     assert bridge.status()["plans"] == [
         {"id": "shared-plan", "status": "clean", "plan_status": "draft"}
     ]
@@ -59,20 +101,32 @@ def test_sync_imports_a_note_edit_as_unapproved_revision_and_preserves_personal(
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
     note = tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
-    text = note.read_text(encoding="utf-8").replace(
-        "Let agents cooperate.", "Ship a markdown bridge."
+    definition = _definition_file(tmp_path)
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace(
+            "Let agents cooperate.", "Ship a markdown bridge."
+        ),
+        encoding="utf-8",
     )
-    text = text.replace(
-        "<!-- agops:personal:start -->", "<!-- agops:personal:start -->\nA private thought."
+    note.write_text(
+        note.read_text(encoding="utf-8").replace(
+            "<!-- agops:personal:start -->", "<!-- agops:personal:start -->\nA private thought."
+        ),
+        encoding="utf-8",
     )
-    note.write_text(text, encoding="utf-8")
+    assert bridge.status()["plans"][0]["status"] == "edited"
 
     result = bridge.sync("human", "terminal")
     assert result["imported"] == ["shared-plan"]
     current = load_plan(local_hub, "shared-plan")
     assert current["revision"] == 2 and current["goal"] == "Ship a markdown bridge."
     rendered = note.read_text(encoding="utf-8")
-    assert "A private thought." in rendered and "agops_latest_revision: 2" in rendered
+    assert "A private thought." in rendered
+    assert "**Goal:** Ship a markdown bridge." in rendered
+    assert "Revision 2 is waiting for approval" in rendered
+    assert bridge.status()["plans"][0]["status"] == "clean"
+    sidecar = bridge._sidecar(tmp_path / "vault")["plans"]["shared-plan"]
+    assert sidecar["latest_revision"] == 2
 
 
 def test_concurrent_hub_and_note_edits_are_a_conflict(
@@ -81,7 +135,7 @@ def test_concurrent_hub_and_note_edits_are_a_conflict(
     hub = Hub(local_hub, profile="default")
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
-    note = tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
+    note = _definition_file(tmp_path)
     note.write_text(
         note.read_text(encoding="utf-8").replace("Let agents cooperate.", "Note wins?"),
         encoding="utf-8",
@@ -99,19 +153,63 @@ def test_concurrent_hub_and_note_edits_are_a_conflict(
     assert note.read_bytes() == before
 
 
+def test_resolve_settles_a_conflict_in_either_direction(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    definition = _definition_file(tmp_path)
+
+    def conflict(goal: str) -> None:
+        definition.write_text(
+            definition.read_text(encoding="utf-8").replace(
+                load_plan(local_hub, "shared-plan")["goal"], "Note wins?"
+            ),
+            encoding="utf-8",
+        )
+        plan = load_plan(local_hub, "shared-plan")
+        plan["goal"] = goal
+        baseline = bridge._sidecar(tmp_path / "vault")["plans"]["shared-plan"]
+        hub.draft_plan_definition(
+            plan, "codex", "two", int(baseline["revision"]), baseline["definition_hash"]
+        )
+        assert bridge.status()["plans"][0]["status"] == "conflict"
+
+    conflict("Hub wins?")
+    bridge.resolve("shared-plan", "agops", "human", "terminal")
+    assert "Hub wins?" in definition.read_text(encoding="utf-8")
+    assert bridge.status()["plans"][0]["status"] == "clean"
+
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace("Hub wins?", "Note wins?"), encoding="utf-8"
+    )
+    plan = load_plan(local_hub, "shared-plan")
+    plan["goal"] = "Hub changed again."
+    baseline = bridge._sidecar(tmp_path / "vault")["plans"]["shared-plan"]
+    hub.draft_plan_definition(
+        plan, "codex", "three", int(baseline["revision"]), baseline["definition_hash"]
+    )
+    assert bridge.status()["plans"][0]["status"] == "conflict"
+    bridge.resolve("shared-plan", "notes", "human", "terminal")
+    assert load_plan(local_hub, "shared-plan")["goal"] == "Note wins?"
+    assert bridge.status()["plans"][0]["status"] == "clean"
+
+
 def test_invalid_note_is_left_untouched_and_disconnect_keeps_files(
     local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
 ) -> None:
     hub = Hub(local_hub, profile="default")
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
-    note = tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
-    broken = note.read_text(encoding="utf-8").replace("\nid: shared-plan", "\nid: wrong-plan", 1)
+    note = _definition_file(tmp_path)
+    broken = note.read_text(encoding="utf-8").replace("id: shared-plan", "id: wrong-plan", 1)
     note.write_text(broken, encoding="utf-8")
 
     assert bridge.status()["plans"][0]["status"] == "invalid"
-    bridge.render_all()
+    result = bridge.render_all()
     assert note.read_text(encoding="utf-8") == broken
+    assert any("must match" in warning for warning in result["warnings"])
     assert bridge.disconnect()["disconnected"] == str(tmp_path / "vault")
     assert note.exists()
 
@@ -124,9 +222,14 @@ def test_sync_rejects_an_edited_definition_with_missing_personal_marker(
     bridge = _connected(hub, tmp_path / "vault")
     note = tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
     note.write_text(
-        note.read_text(encoding="utf-8")
-        .replace("Let agents cooperate.", "This edit must not import.")
-        .replace("<!-- agops:personal:start -->", ""),
+        note.read_text(encoding="utf-8").replace("<!-- agops:personal:start -->", ""),
+        encoding="utf-8",
+    )
+    definition = _definition_file(tmp_path)
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace(
+            "Let agents cooperate.", "This edit must not import."
+        ),
         encoding="utf-8",
     )
 
@@ -196,11 +299,11 @@ def test_scalar_custom_tag_is_preserved_when_agops_tag_is_added(
     bridge = _connected(hub, tmp_path / "vault")
     note = tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
     note.write_text(
-        note.read_text(encoding="utf-8").replace("tags:\n- agops", "tags: work"),
+        note.read_text(encoding="utf-8").replace("tags:\n- agops\n- agops/plan", "tags: work"),
         encoding="utf-8",
     )
     bridge.render_all(force=True)
-    assert "tags:\n- work\n- agops" in note.read_text(encoding="utf-8")
+    assert "tags:\n- work\n- agops\n- agops/plan" in note.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -247,9 +350,10 @@ def test_pending_definition_displays_only_approved_execution_tasks(
     hub.draft_plan_definition(current, "codex", "two", 1, expected_hash)
 
     text = (tmp_path / "vault" / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
-    assert "Execution tasks (approved revision 1)" in text
-    assert "pending approval; its new tasks are not executable" in text
-    assert "`unapproved`:" not in text
+    assert "Revision 2 is waiting for approval" in text
+    assert "## Open (2)" in text and "`unapproved`" not in text
+    assert "unapproved" in _definition_file(tmp_path).read_text(encoding="utf-8")
+    assert bridge.status()["plans"][0]["status"] == "clean"
 
 
 def test_resolve_only_writes_its_selected_note(
@@ -266,14 +370,17 @@ def test_resolve_only_writes_its_selected_note(
     hub.draft_plan(plan_file, "codex", "one")
     hub.draft_plan(second, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
-    other = tmp_path / "vault" / "plans" / "active" / "second-plan.md"
+    other = _definition_file(tmp_path, "second-plan")
     other.write_text(
-        other.read_text(encoding="utf-8") + "\nunaltered dirty text\n", encoding="utf-8"
+        other.read_text(encoding="utf-8").replace("Let agents cooperate.", "Dirty."),
+        encoding="utf-8",
     )
     before = other.read_bytes()
+    note_before = (tmp_path / "vault" / "plans" / "active" / "second-plan.md").read_bytes()
 
     bridge.resolve("shared-plan", "agops", "human", "terminal")
     assert other.read_bytes() == before
+    assert (tmp_path / "vault" / "plans" / "active" / "second-plan.md").read_bytes() == note_before
 
 
 def test_resolve_notes_rejects_finished_plans_and_clean_notes(
@@ -334,8 +441,16 @@ def test_knowledge_projects_and_activity_are_mirrored(
 
     note = vault / "knowledge" / "global" / "testing.md"
     text = note.read_text(encoding="utf-8")
-    assert "agops_scope: global" in text
+    assert "agops_" not in text
+    front = _frontmatter(text)
+    assert list(front) == ["tags", "kind", "scope", "updated"]
+    assert front["tags"] == ["agops", "agops/knowledge"]
+    assert front["kind"] == "fact" and front["scope"] == "global"
+    assert isinstance(front["updated"], date)
     assert "Always keep concrete evidence." in text
+    assert text.rstrip().endswith("_Mirrored from agops. Change it with `agops knowledge add`._")
+    sidecar = json.loads((vault / ".agops-notes.json").read_text())
+    assert sidecar["knowledge"]["knowledge/global/testing.md"]["created_by"] == "codex"
     assert PERSONAL_START in text
     assert (vault / "knowledge" / "project" / "acme-widgets" / "deploys.md").exists()
     index = (vault / "Knowledge.md").read_text(encoding="utf-8")
@@ -410,7 +525,7 @@ def test_mirrored_knowledge_note_edits_are_not_imported(
     assert "Original body." in entry.read_text(encoding="utf-8")
 
 
-def test_plan_frontmatter_has_overview_fields_with_unquoted_dates(
+def test_plan_frontmatter_is_slim_with_unquoted_dates(
     local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
 ) -> None:
     hub = Hub(local_hub, profile="default")
@@ -420,19 +535,13 @@ def test_plan_frontmatter_has_overview_fields_with_unquoted_dates(
     _connected(hub, tmp_path / "vault")
     text = (tmp_path / "vault" / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
 
-    assert "agops_title: Shared plan" in text
-    assert "agops_workspace: Acme" in text
-    assert "agops_projects:\n- acme-widgets" in text
-    assert "agops_health: waiting" in text
-    assert "agops_tasks: 2" in text
-    assert "agops_tasks_done: 0" in text
-    assert "agops_tasks_open: 2" in text
-    assert "agops_tasks_blocked: 0" in text
-
-    frontmatter = yaml.safe_load(text.split("---", 2)[1])
-    assert isinstance(frontmatter["agops_created"], date)
-    assert isinstance(frontmatter["agops_last_activity"], date)
-    assert "agops_completed" not in frontmatter
+    front = _frontmatter(text)
+    assert list(front) == ["tags", "status", "health", "workspace", "progress", "last_activity"]
+    assert front["tags"] == ["agops", "agops/plan"]
+    assert front["status"] == "active" and front["health"] == "waiting"
+    assert front["workspace"] == "Acme" and front["progress"] == "0/2"
+    assert isinstance(front["last_activity"], date)
+    assert "agops_" not in text
 
 
 def test_plan_health_transitions() -> None:
@@ -530,20 +639,41 @@ def test_agops_base_is_written_once_and_left_untouched(
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
     base_path = tmp_path / "vault" / "agops.base"
-    assert base_path.exists()
-    parsed = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+    assert base_path.read_text(encoding="utf-8") == AGOPS_BASE
+    assert "agops_" not in AGOPS_BASE and 'file.hasTag("agops/plan")' in AGOPS_BASE
+    parsed = yaml.safe_load(AGOPS_BASE)
     assert [view["name"] for view in parsed["views"]] == [
         "Active plans",
         "Stalled",
         "By workspace",
         "Recently completed",
         "Knowledge",
-        "Retire candidates",
+        "Plan-linked facts",
     ]
 
     base_path.write_text("custom: true\n", encoding="utf-8")
-    bridge.render_all(force=True)
+    result = bridge.render_all(force=True)
     assert base_path.read_text(encoding="utf-8") == "custom: true\n"
+    assert result["warnings"] == []
+
+
+def test_agops_base_upgrades_only_the_untouched_old_default(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    base_path = tmp_path / "vault" / "agops.base"
+
+    base_path.write_text(LEGACY_AGOPS_BASE, encoding="utf-8")
+    assert bridge.render_all()["warnings"] == []
+    assert base_path.read_text(encoding="utf-8") == AGOPS_BASE
+
+    customized = LEGACY_AGOPS_BASE.replace("Active plans", "My plans")
+    base_path.write_text(customized, encoding="utf-8")
+    result = bridge.render_all()
+    assert base_path.read_text(encoding="utf-8") == customized
+    assert any("update your views" in warning for warning in result["warnings"])
 
 
 def test_notes_review_verdicts(local_hub: Path, fake_home: Path, tmp_path: Path) -> None:
@@ -697,7 +827,8 @@ def test_finished_plan_moves_to_archive_preserving_user_content(
     assert not (tmp_path / "vault" / "plans" / "active").exists()  # emptied dir pruned
     text = archived.read_text(encoding="utf-8")
     assert "A private thought." in text and "mood: keep-me" in text
-    assert f"agops_status: {outcome}" in text
+    assert _frontmatter(text)["status"] == outcome
+    assert _definition_file(tmp_path).is_file()  # the definition does not move with the note
     assert result["warnings"] == []
     rel = archived.relative_to(tmp_path / "vault").as_posix()
     assert f"({rel})" in _vault_note(tmp_path, "Plans.md").read_text(encoding="utf-8")
@@ -733,18 +864,20 @@ def test_edited_note_is_not_moved_but_still_syncs(
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
     active = _vault_note(tmp_path, "plans/active/shared-plan.md")
-    active.write_text(
-        active.read_text(encoding="utf-8").replace(
+    definition = _definition_file(tmp_path)
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace(
             "Let agents cooperate.", "Ship a markdown bridge."
         ),
         encoding="utf-8",
     )
-    before = active.read_bytes()
+    before = definition.read_bytes()
     hub.approve_plan("shared-plan")
     hub.cancel_plan("shared-plan", "stop")  # desired path becomes archive/...
 
     result = bridge.render_all()
-    assert active.read_bytes() == before
+    assert definition.read_bytes() == before
+    assert active.is_file()
     assert not (tmp_path / "vault" / "plans" / "archive").exists()
     assert any("not moved" in warning for warning in result["warnings"])
     assert bridge.status()["plans"][0]["status"] == "edited"
@@ -757,12 +890,16 @@ def test_sync_imports_an_edit_from_a_legacy_location(
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
     active = _vault_note(tmp_path, "plans/active/shared-plan.md")
-    edited = active.read_text(encoding="utf-8").replace(
-        "Let agents cooperate.", "Ship a markdown bridge."
+    definition = _definition_file(tmp_path)
+    definition.write_text(
+        definition.read_text(encoding="utf-8").replace(
+            "Let agents cooperate.", "Ship a markdown bridge."
+        ),
+        encoding="utf-8",
     )
     elsewhere = _vault_note(tmp_path, "plans/somewhere/shared-plan.md")
     elsewhere.parent.mkdir(parents=True)
-    elsewhere.write_text(edited, encoding="utf-8")
+    elsewhere.write_text(active.read_text(encoding="utf-8"), encoding="utf-8")
     active.unlink()
 
     result = bridge.sync("human", "terminal")
@@ -794,3 +931,120 @@ def test_home_groups_active_plans_by_workspace(
     section = home.split("## Active plans")[1].split("## Views")[0]
     assert "### Acme" in section and "### Globex" in section
     assert "(plans/active/second-plan.md)" in section
+
+
+def test_plan_note_reads_like_a_page(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    widgets = make_project(tmp_path / "widgets")
+    hub.register_project(widgets, workspace="Acme")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.approve_plan("shared-plan")
+    _connected(hub, tmp_path / "vault")
+    hub.claim_task("shared-plan", "first", "codex", "session-one", widgets)
+    hub.checkpoint_task("shared-plan", "first", "codex", "session-one", "Half way " + "x" * 300, [])
+    text = _vault_note(tmp_path, "plans/active/shared-plan.md").read_text(encoding="utf-8")
+
+    assert "live · Acme · 0/2 done · last " in text
+    assert "## Needs you\n\n_Nothing._" in text
+    assert "- [ ] `first` First task — claimed by codex" in text
+    assert "- [ ] `second` Second task — waiting on `first`" in text
+    summary = next(line for line in text.splitlines() if line.startswith("  - Half way"))
+    assert len(summary) <= 165 and summary.endswith("…")
+    assert "_None yet._" in text
+
+    hub.block_task("shared-plan", "first", "codex", "session-one", "Waiting on access.")
+    text = _vault_note(tmp_path, "plans/active/shared-plan.md").read_text(encoding="utf-8")
+    assert "- Blocked: `first` — Waiting on access." in text
+    assert "- [ ] `first` First task — blocked: Waiting on access." in text
+
+    hub.claim_task("shared-plan", "first", "codex", "session-one", widgets)
+    hub.complete_task("shared-plan", "first", "codex", "session-one", "Done.", ["tests pass"])
+    text = _vault_note(tmp_path, "plans/active/shared-plan.md").read_text(encoding="utf-8")
+    assert "## Done (1)\n\n> [!done]- 1 tasks\n> - `first` First task" in text
+    assert "## Open (1)" in text and "- [ ] `second` Second task — ready" in text
+
+
+def test_old_format_note_migrates_keeping_personal_notes_and_custom_keys(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = _legacy_note(bridge, tmp_path)
+    assert not _definition_file(tmp_path).exists()
+
+    result = bridge.render_all()
+    assert result["warnings"] == []
+    text = note.read_text(encoding="utf-8")
+    front = _frontmatter(text)
+    assert front["mine"] == 1
+    assert front["tags"] == ["agops", "agops/plan"]
+    assert not any(str(key).startswith("agops_") for key in front)
+    assert "My old thought." in text and "```" not in text and "agops:definition" not in text
+    definition = yaml.safe_load(_definition_file(tmp_path).read_text(encoding="utf-8"))
+    assert definition["goal"] == "Let agents cooperate."
+    assert bridge.status()["plans"][0]["status"] == "clean"
+
+
+def test_old_format_note_with_an_unsynced_edit_keeps_it_in_the_definition_file(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = _legacy_note(bridge, tmp_path, goal="Ship a markdown bridge.")
+    assert bridge.status()["plans"][0]["status"] == "edited"
+
+    result = bridge.render_all()
+    assert result["warnings"] == []
+    assert "Ship a markdown bridge." in _definition_file(tmp_path).read_text(encoding="utf-8")
+    text = note.read_text(encoding="utf-8")
+    assert "**Goal:** Let agents cooperate." in text  # the page still shows the hub's truth
+    assert "My old thought." in text and "```" not in text
+    assert load_plan(local_hub, "shared-plan")["revision"] == 1
+    assert bridge.status()["plans"][0]["status"] == "edited"
+
+    result = bridge.sync("human", "terminal")
+    assert result["imported"] == ["shared-plan"]
+    assert load_plan(local_hub, "shared-plan")["goal"] == "Ship a markdown bridge."
+    assert bridge.status()["plans"][0]["status"] == "clean"
+
+
+def test_old_format_note_edited_on_both_sides_stays_a_conflict_after_migration(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    _legacy_note(bridge, tmp_path, goal="Note wins?")
+    plan = load_plan(local_hub, "shared-plan")
+    plan["goal"] = "Hub wins?"
+    baseline = bridge._sidecar(tmp_path / "vault")["plans"]["shared-plan"]
+    hub.draft_plan_definition(plan, "codex", "two", 1, baseline["definition_hash"])
+
+    bridge.render_all()
+    assert "Note wins?" in _definition_file(tmp_path).read_text(encoding="utf-8")
+    assert bridge.status()["plans"][0]["status"] == "conflict"
+
+
+def test_user_keep_and_tags_survive_and_legacy_keys_are_stripped(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.add_knowledge("global", "testing", "Testing", "Body.", "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "knowledge" / "global" / "testing.md"
+    note.write_text(
+        note.read_text(encoding="utf-8").replace(
+            "---\n", "---\nkeep: true\nagops_old: 1\ntags: [mine]\n", 1
+        ).replace("tags:\n- agops\n- agops/knowledge\n", ""),
+        encoding="utf-8",
+    )
+    bridge.render_all()
+    front = _frontmatter(note.read_text(encoding="utf-8"))
+    assert front["keep"] is True and "agops_old" not in front
+    assert front["tags"] == ["mine", "agops", "agops/knowledge"]
+    entry = bridge.review()["knowledge"][0]
+    assert entry["kept"] is True and entry["verdict"] == "keep"

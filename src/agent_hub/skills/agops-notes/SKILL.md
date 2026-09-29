@@ -15,15 +15,18 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
 
 - `Home.md` — start here: tally, what needs the user, active plans by last activity, views.
 - `agops.base` — Obsidian Bases views (Active plans, Stalled, By workspace, Recently
-  completed, Knowledge, Retire candidates). Written once; the user may customize it.
+  completed, Knowledge, Plan-linked facts). Written once; the user may customize it.
 - `Plans.md`, `Knowledge.md`, `Activity.md`, `Projects.md` — generated indexes.
 - `plans/active/<id>.md` (open plans) and `plans/archive/<workspace>/<id>.md` (completed or
-  cancelled; moved automatically unless the note has an unsynced edit) — two-way: the fenced YAML definition imports as a new *unapproved*
-  revision on `agops notes sync`. `knowledge/**` — read-only mirror.
-- Frontmatter `agops_*` fields are generated (`agops_health`, `agops_last_activity`,
-  `agops_workspace`, task counts). Users may add their own frontmatter, including
-  `keep: true` on a knowledge note, and write inside the `agops:personal` markers; both
-  are preserved.
+  cancelled; moved automatically unless its definition has an unsynced edit) — readable
+  pages. The plan definition is `plans/.definitions/<id>.yaml` (hidden in Obsidian): edits
+  there import as a new *unapproved* revision on `agops notes sync`. `knowledge/**` —
+  read-only mirror.
+- Frontmatter `status`, `health`, `workspace`, `progress`, `last_activity` (plans) and `kind`,
+  `scope`, `updated`, `plan` (knowledge) are generated, as are the `agops` tags. Users may add
+  their own frontmatter, including `keep: true` on a knowledge note, and write under
+  "My notes" (inside the `agops:personal` markers); both are preserved. Ids and hashes live
+  in `.agops-notes.json`.
 
 Health, as of the last sync: `live` (a task has an active lease), `waiting` (recent
 activity, nobody working), `blocked` (every open task is blocked), `stalled` (no live claim
@@ -44,8 +47,8 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
 4. **Knowledge, ask:** list `verdict: review` entries in one short table. Offer to fold a
    plan's surviving log entries into one `archive` entry (`agops knowledge add --kind
    archive ... `) and retire the originals — only after the user agrees. For an entry the
-   user wants to keep, add `keep: true` to that note's frontmatter (outside the `agops_*`
-   keys); it is preserved and makes `review` report `keep`.
+   user wants to keep, add `keep: true` to that note's frontmatter (any key not
+   listed above); it is preserved and makes `review` report `keep`.
 5. **Plans, ask:** from `plans`, list `stalled` and `blocked` plans, plus any plan you judge
    superseded (a later plan covers the same subject — compare titles, goals and blocked
    reasons). For each, give one line: plan, idle days, why, and the proposed action:

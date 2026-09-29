@@ -17,7 +17,8 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
 - `agops.base` — Obsidian Bases views (Active plans, Stalled, By workspace, Recently
   completed, Knowledge, Retire candidates). Written once; the user may customize it.
 - `Plans.md`, `Knowledge.md`, `Activity.md`, `Projects.md` — generated indexes.
-- `plans/<id>.md` — two-way: the fenced YAML definition imports as a new *unapproved*
+- `plans/active/<id>.md` (open plans) and `plans/archive/<workspace>/<id>.md` (completed or
+  cancelled; moved automatically unless the note has an unsynced edit) — two-way: the fenced YAML definition imports as a new *unapproved*
   revision on `agops notes sync`. `knowledge/**` — read-only mirror.
 - Frontmatter `agops_*` fields are generated (`agops_health`, `agops_last_activity`,
   `agops_workspace`, task counts). Users may add their own frontmatter, including

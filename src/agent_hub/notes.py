@@ -6,6 +6,7 @@ use them; agops only owns the marked regions and the small sidecar baseline.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -214,6 +215,31 @@ def _state_hash(state: PlanState) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def _workspace_dir(workspace: str) -> str:
+    try:
+        return slug(workspace)
+    except ValueError:
+        return "unassigned"
+
+
+def plan_note_path(plan_id: str, status: str, workspace: str) -> str:
+    """A plan note's vault-relative home: open plans in active/, finished ones in archive/."""
+    if status in {"completed", "cancelled"}:
+        return f"plans/archive/{_workspace_dir(workspace)}/{plan_id}.md"
+    return f"plans/active/{plan_id}.md"
+
+
+def _prune_empty_dirs(root: Path) -> None:
+    """Remove empty directories below `root` (never `root` itself, never files)."""
+    if not root.is_dir():
+        return
+    for directory, _, _ in os.walk(root, topdown=False):
+        current = Path(directory)
+        if current != root:
+            with contextlib.suppress(OSError):
+                current.rmdir()
+
+
 def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Read an agops memory file: a YAML mapping, then the body.  Malformed files yield {}."""
     match = _FRONTMATTER.match(text)
@@ -409,12 +435,15 @@ def _plan_overview(
         if plan_state.tasks.get(task["id"]) and plan_state.tasks[task["id"]].status == "blocked"
     ]
     latest = int(plan["revision"])
+    status = _status(plan_state)
+    workspace = plan_workspace(execution_plan, projects)
     return {
         "id": plan["id"],
         "title": plan["title"],
-        "status": _status(plan_state),
+        "status": status,
         "health": plan_health(plan_state, execution_plan, now),
-        "workspace": plan_workspace(execution_plan, projects),
+        "workspace": workspace,
+        "note_path": plan_note_path(plan["id"], status, workspace),
         "projects": plan_project_ids(execution_plan),
         "latest_revision": latest,
         "first_event_at": plan_state.first_event_at,
@@ -545,6 +574,24 @@ class NotesBridge:
             raise ValueError(f"Missing personal-notes markers in {path}")
         return frontmatter, personal.group(1).strip("\n")
 
+    def _locate_plan(self, target: Path, sidecar: dict[str, Any], plan_id: str) -> Path | None:
+        """Find a plan's existing note: sidecar path, legacy flat path, then a search."""
+        root = target.resolve()
+        recorded = (sidecar["plans"].get(plan_id) or {}).get("path")
+        candidates: list[Path] = []
+        if isinstance(recorded, str) and recorded:
+            candidates.append(target / recorded)
+        candidates.append(target / "plans" / f"{plan_id}.md")
+        for candidate in candidates:
+            if candidate.is_file() and candidate.resolve().is_relative_to(root):
+                return candidate
+        plans = target / "plans"
+        if plans.is_dir():
+            for candidate in sorted(plans.rglob(f"{plan_id}.md")):
+                if candidate.is_file() and candidate.resolve().is_relative_to(root):
+                    return candidate
+        return None
+
     def _note_definition(self, path: Path) -> dict[str, Any]:
         # Imports accept only the full hybrid-note envelope, not an isolated YAML fence.
         self._frontmatter_and_personal(path)
@@ -663,7 +710,7 @@ class NotesBridge:
         if not groups["draft"]:
             lines.append("_None._")
         for plan in groups["draft"]:
-            lines.append(f"- [{plan['title']}](plans/{plan['id']}.md)")
+            lines.append(f"- [{plan['title']}]({plan['note_path']})")
         lines.extend(["", "## Active", ""])
         if not groups["active"]:
             lines.append("_None._")
@@ -685,7 +732,7 @@ class NotesBridge:
                     idle = plan["idle_days"]
                     idle_text = f" · {idle}d idle" if idle is not None else ""
                     lines.append(
-                        f"- [{plan['title']}](plans/{plan['id']}.md) · {plan['health']}"
+                        f"- [{plan['title']}]({plan['note_path']}) · {plan['health']}"
                         f"{last_text}{idle_text}{pending}"
                     )
                 lines.append("")
@@ -698,7 +745,7 @@ class NotesBridge:
         for plan in completed:
             date = _date_only(plan["completed_at"])
             suffix = f" · completed {date.isoformat()}" if date else ""
-            lines.append(f"- [{plan['title']}](plans/{plan['id']}.md){suffix}")
+            lines.append(f"- [{plan['title']}]({plan['note_path']}){suffix}")
         lines.extend(["", "## Cancelled", ""])
         cancelled = sorted(
             groups["cancelled"], key=lambda plan: plan["cancelled_at"] or "", reverse=True
@@ -708,7 +755,7 @@ class NotesBridge:
         for plan in cancelled:
             date = _date_only(plan["cancelled_at"])
             suffix = f" · cancelled {date.isoformat()}" if date else ""
-            lines.append(f"- [{plan['title']}](plans/{plan['id']}.md){suffix}")
+            lines.append(f"- [{plan['title']}]({plan['note_path']}){suffix}")
         lines.append("")
         return "\n".join(lines)
 
@@ -731,7 +778,7 @@ class NotesBridge:
         for plan in active:
             if plan["pending_approval"]:
                 needs.append(
-                    f"- Pending approval: [{plan['title']}](plans/{plan['id']}.md) · "
+                    f"- Pending approval: [{plan['title']}]({plan['note_path']}) · "
                     f"revision {plan['latest_revision']}"
                 )
         for plan in active:
@@ -740,28 +787,43 @@ class NotesBridge:
                 if len(reason) > 160:
                     reason = reason[:159].rstrip() + "…"
                 needs.append(
-                    f"- Blocked: [{plan['title']}](plans/{plan['id']}.md) / "
+                    f"- Blocked: [{plan['title']}]({plan['note_path']}) / "
                     f"`{item['task']}` — {reason}"
                 )
         lines.extend(needs or ["_Nothing._"])
-        lines.extend(
-            [
-                "",
-                "## Active plans",
-                "",
-                "| Plan | Workspace | Health | Last activity | Idle | Open | Blocked |",
-                "|---|---|---|---|---|---|---|",
-            ]
-        )
-        for plan in sorted(active, key=lambda item: item["last_event_at"] or "", reverse=True):
-            title = plan["title"].replace("|", "\\|")
-            last = _date_only(plan["last_event_at"])
-            idle = plan["idle_days"]
-            lines.append(
-                f"| [{title}](plans/{plan['id']}.md) | {plan['workspace']} | {plan['health']} | "
-                f"{last.isoformat() if last else ''} | {f'{idle}d' if idle is not None else ''} | "
-                f"{plan['tasks_open']} | {plan['tasks_blocked']} |"
+        lines.extend(["", "## Active plans", ""])
+        by_workspace: dict[str, list[dict[str, Any]]] = {}
+        for plan in active:
+            by_workspace.setdefault(plan["workspace"], []).append(plan)
+        if not by_workspace:
+            lines.extend(["_None._"])
+
+        def newest(workspace: str) -> str:
+            return max(plan["last_event_at"] or "" for plan in by_workspace[workspace])
+
+        for workspace in sorted(by_workspace, key=lambda name: (newest(name), name), reverse=True):
+            lines.extend(
+                [
+                    f"### {workspace}",
+                    "",
+                    "| Plan | Health | Last activity | Idle | Open | Blocked |",
+                    "|---|---|---|---|---|---|",
+                ]
             )
+            ordered = sorted(
+                by_workspace[workspace], key=lambda item: item["last_event_at"] or "", reverse=True
+            )
+            for plan in ordered:
+                title = plan["title"].replace("|", "\\|")
+                last = _date_only(plan["last_event_at"])
+                idle = plan["idle_days"]
+                lines.append(
+                    f"| [{title}]({plan['note_path']}) | {plan['health']} | "
+                    f"{last.isoformat() if last else ''} | "
+                    f"{f'{idle}d' if idle is not None else ''} | "
+                    f"{plan['tasks_open']} | {plan['tasks_blocked']} |"
+                )
+            lines.append("")
         lines.extend(
             [
                 "",
@@ -785,7 +847,7 @@ class NotesBridge:
         if recent:
             for plan in recent:
                 date = _date_only(plan["completed_at"])
-                lines.append(f"- [{plan['title']}](plans/{plan['id']}.md) · {date.isoformat()}")
+                lines.append(f"- [{plan['title']}]({plan['note_path']}) · {date.isoformat()}")
         else:
             lines.append("_None._")
         lines.extend(
@@ -1043,12 +1105,12 @@ class NotesBridge:
         output: list[dict[str, Any]] = []
         for summary in self.hub.list_plans():
             plan_id = summary["id"]
-            path = target / "plans" / f"{plan_id}.md"
+            path = self._locate_plan(target, sidecar, plan_id)
             baseline = sidecar["plans"].get(plan_id)
             plan = load_plan(self.hub.root, plan_id)
             hub_hash = definition_hash(plan)
             plan_state = state.plans.get(plan_id, PlanState(plan_id))
-            if not path.exists():
+            if path is None:
                 value = "missing"
             else:
                 try:
@@ -1080,6 +1142,20 @@ class NotesBridge:
             },
         }
 
+    def _safe_to_move(
+        self, source: Path, destination: Path, baseline: dict[str, Any], hub_hash: str, force: bool
+    ) -> bool:
+        """Move only a parseable, unedited note (or one being force-resolved) to a free path."""
+        if destination.exists():
+            return False
+        if force:
+            return True
+        try:
+            note_hash = definition_hash(self._note_definition(source))
+        except ValueError:
+            return False
+        return note_hash in {baseline.get("definition_hash"), hub_hash}
+
     def render_all(
         self, force: bool = False, plan_ids: set[str] | None = None
     ) -> dict[str, Any]:
@@ -1104,11 +1180,26 @@ class NotesBridge:
                 execution_plan = load_plan(self.hub.root, plan_id, plan_state.approved_revision)
             overview = _plan_overview(plan, plan_state, execution_plan, projects, now)
             overviews.append(overview)
+            desired = target / overview["note_path"]
+            existing = self._locate_plan(target, sidecar, plan_id)
+            path = existing or desired
+            if existing is not None and existing != desired:
+                overview["note_path"] = existing.relative_to(target).as_posix()
             if plan_ids is not None and plan_id not in plan_ids:
                 continue
-            path = target / "plans" / f"{plan_id}.md"
             hub_hash = definition_hash(plan)
             baseline = sidecar["plans"].get(plan_id, {})
+            if existing is not None and existing != desired:
+                if self._safe_to_move(existing, desired, baseline, hub_hash, force):
+                    desired.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(existing, desired)
+                    path = desired
+                    overview["note_path"] = desired.relative_to(target).as_posix()
+                else:
+                    warnings.append(
+                        f"{plan_id}: left at {existing.relative_to(target).as_posix()} "
+                        f"(not moved to {desired.relative_to(target).as_posix()})"
+                    )
             should_write = force or not path.exists()
             note: dict[str, Any] | None = None
             note_changed = False
@@ -1131,6 +1222,9 @@ class NotesBridge:
                     "state_hash": _state_hash(plan_state),
                     "revision": int(plan["revision"]),
                 }
+            if path.exists() and plan_id in sidecar["plans"]:
+                sidecar["plans"][plan_id]["path"] = path.relative_to(target).as_posix()
+        _prune_empty_dirs(target / "plans")
         _atomic_write(target / "Plans.md", self._index(overviews))
         _atomic_write(target / "Home.md", self._home(overviews, now))
         self._ensure_base(target)
@@ -1160,8 +1254,8 @@ class NotesBridge:
             plan_state = state.plans.get(plan_id, PlanState(plan_id))
             if _status(plan_state) in {"completed", "cancelled"}:
                 continue
-            path = target / "plans" / f"{plan_id}.md"
-            if not path.exists():
+            path = self._locate_plan(target, sidecar, plan_id)
+            if path is None:
                 continue
             baseline = sidecar["plans"].get(plan_id)
             if baseline is None:
@@ -1195,8 +1289,8 @@ class NotesBridge:
         target = self.target()
         if target is None:
             raise ValueError("No notes target is connected")
-        path = target / "plans" / f"{plan_id}.md"
-        if not path.exists():
+        path = self._locate_plan(target, self._sidecar(target), plan_id)
+        if path is None:
             raise ValueError(f"Missing note for plan: {plan_id}")
         if take == "notes":
             note = self._note_definition(path)

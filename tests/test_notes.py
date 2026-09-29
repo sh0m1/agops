@@ -672,7 +672,15 @@ def test_agops_base_upgrades_only_the_untouched_old_default(
     customized = LEGACY_AGOPS_BASE.replace("Active plans", "My plans")
     base_path.write_text(customized, encoding="utf-8")
     result = bridge.render_all()
+    backup = tmp_path / "vault" / "agops.old.base"
+    assert base_path.read_text(encoding="utf-8") == AGOPS_BASE
+    assert backup.read_text(encoding="utf-8") == customized
+    assert any("agops.old.base" in warning for warning in result["warnings"])
+
+    base_path.write_text(customized, encoding="utf-8")
+    result = bridge.render_all()
     assert base_path.read_text(encoding="utf-8") == customized
+    assert backup.read_text(encoding="utf-8") == customized
     assert any("update your views" in warning for warning in result["warnings"])
 
 

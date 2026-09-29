@@ -186,7 +186,9 @@ agops notes status
 agops notes sync
 ```
 
-The folder holds the whole working picture: `Plans.md` and `plans/<id>.md` for the plans,
+The folder holds the whole working picture: `Plans.md` and the plan notes (`plans/active/<id>.md` while a plan is open,
+`plans/archive/<workspace>/<id>.md` once it is completed or cancelled; agops moves a note only when
+it has no unsynced edit),
 `knowledge/<scope>/<key>.md` with a `Knowledge.md` index for the knowledge entries, `Projects.md`
 for the registered repositories by workspace, and `Activity.md` for who has claimed what, what is
 blocked, and what is ready next. Only plan notes are two-way; knowledge, projects, and activity are

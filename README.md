@@ -8,11 +8,6 @@ It does not call a model API and does not depend on a particular subscription. G
 store; a small CLI provides safe state transitions, and a stdio MCP server exposes the same
 operations to clients that support MCP.
 
-agops was previously named Agent Hub. The Python package is still `agent_hub`, the runtime paths
-still live under `agent-hub`, and the environment variables still use the `AGENT_HUB_` prefix; the
-old `agent-hub` command remains as an alias for `agops`. The `agops` command ships from the first
-revision after 0.6.1; installations pinned to 0.6.1 provide only `agent-hub`.
-
 ## Install
 
 One command on a machine that already runs Claude Code and/or Codex CLI:
@@ -23,14 +18,14 @@ curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh | sh
 
 It installs `uv` if missing, installs `agops` from the current main branch, and runs
 `agops setup`, which ends with a summary of what was configured. The memory lives in a local
-Git repository at `~/.local/share/agent-hub/repo`; nothing leaves the machine.
+Git repository at `~/.local/share/agops/repo`; nothing leaves the machine.
 
 To share the memory across machines, give the same command a Git remote — on the first machine
 it pushes the existing local memory there, on the others it clones it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh \
-  | sh -s -- --remote git@github.com:you/agent-hub-memory.git
+  | sh -s -- --remote git@github.com:you/agops-memory.git
 ```
 
 To go back to a machine-local memory, `agops setup --local` detaches and forgets the remote
@@ -47,7 +42,7 @@ Re-run the one-liner (or plain `agops setup`) to upgrade; the remote is remember
 `agops doctor` and `agops scan` remain available for later health checks; `--json` gives
 machine-readable output.
 
-The remote URL is stored verbatim in `~/.config/agent-hub/config.json` and echoed by `--dry-run`;
+The remote URL is stored verbatim in `~/.config/agops/config.json` and echoed by `--dry-run`;
 prefer SSH or a credential helper over embedding a token in the URL.
 
 Add repository-level instructions for tools that do not load the user configuration:
@@ -120,14 +115,14 @@ agops setup --profile private --local
 Sessions use the default profile unless the terminal says otherwise:
 
 ```sh
-AGENT_HUB_PROFILE=private claude     # this session reads and writes only the private hub
+AGOPS_PROFILE=private claude     # this session reads and writes only the private hub
 claude                               # this one uses the team hub
 ```
 
 The variable reaches the MCP server that Claude Code or Codex starts, so it applies to agent
 sessions, not only to shell commands. The brief's header always names the hub
 (`Hub: private · local only`). An unknown profile is an error rather than a fallback to the
-default, and if `AGENT_HUB_REPO` is also set the brief warns that it overrides the profile.
+default, and if `AGOPS_REPO` is also set the brief warns that it overrides the profile.
 `agops profile list` shows the profiles, the default, and the one the current terminal
 resolves to; `agops profile default NAME` changes the default.
 
@@ -152,7 +147,7 @@ agops task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12
 ```
 
 `agops plan list` and `agops task ready [--tier NAME]` show what is available. Set
-`AGENT_HUB_ACTOR` to name the agent and `AGENT_HUB_SESSION` to pin a session id explicitly.
+`AGOPS_ACTOR` to name the agent and `AGOPS_SESSION` to pin a session id explicitly.
 
 Tasks carry a `tier` (default `standard`); `memory/policy/tiers.yaml` maps model ids to tiers.
 Frontier models plan and review, cheaper models execute, and the hub rejects claims that cross

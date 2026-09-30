@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from conftest import git, project
 
-from agent_hub.hub import Hub
-from agent_hub.policy import DEFAULT_POLICY_TEXT, PolicyError, parse_policy, policy_path
-from agent_hub.sessions import load_record, record_session
-from agent_hub.state import State, load_state, validate_plan
+from agops.hub import Hub
+from agops.policy import DEFAULT_POLICY_TEXT, PolicyError, parse_policy, policy_path
+from agops.sessions import load_record, record_session
+from agops.state import State, load_state, validate_plan
 
 
 def _claim_event(payload: dict) -> dict:
@@ -184,8 +184,8 @@ def test_brief_unmapped_model_warns_and_hides_nothing(policy_hub: Path, tmp_path
 
 
 def test_brief_without_policy_is_unenforced(hub_repo: Path, tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     hub = Hub(hub_repo)
     _activate_tiered(hub, tmp_path)
     brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
@@ -194,7 +194,7 @@ def test_brief_without_policy_is_unenforced(hub_repo: Path, tmp_path: Path, monk
 
 
 def test_env_model_overrides_argument(policy_hub: Path, tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_MODEL", "claude-opus-5")
+    monkeypatch.setenv("AGOPS_MODEL", "claude-opus-5")
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
     brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
@@ -270,8 +270,8 @@ def test_invalid_policy_rejects_every_claim(policy_hub: Path, tmp_path: Path) ->
 def test_without_policy_claims_record_model_and_null_tier(
     hub_repo: Path, tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     hub = Hub(hub_repo)
     _activate_tiered(hub, tmp_path)
     worktree = project(tmp_path / "work")

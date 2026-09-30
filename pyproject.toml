@@ -1,5 +1,5 @@
 [project]
-name = "agent-hub"
+name = "agops"
 version = "0.6.1"
 description = "Git-native shared knowledge and planning for local coding agents"
 readme = "README.md"
@@ -12,10 +12,8 @@ dependencies = [
 ]
 
 [project.scripts]
-agops = "agent_hub.cli:main"
-agops-mcp = "agent_hub.mcp_server:main"
-agent-hub = "agent_hub.cli:main"
-agent-hub-mcp = "agent_hub.mcp_server:main"
+agops = "agops.cli:main"
+agops-mcp = "agops.mcp_server:main"
 
 [dependency-groups]
 dev = [
@@ -28,7 +26,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agent_hub"]
+packages = ["src/agops"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

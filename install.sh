@@ -1,5 +1,5 @@
 #!/bin/sh
-# Agent Hub bootstrap: installs uv if needed, installs agent-hub, runs setup.
+# agops bootstrap: installs uv if needed, installs agops, runs setup.
 #
 #   curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh | sh
 #

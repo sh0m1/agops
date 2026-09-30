@@ -1,4 +1,4 @@
-from agent_hub.ids import normalize_remote, project_id_from_remote
+from agops.ids import normalize_remote, project_id_from_remote
 
 
 def test_git_remote_forms_have_one_project_identity() -> None:

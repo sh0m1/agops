@@ -5,9 +5,9 @@ from pathlib import Path
 
 from conftest import git, project
 
-from agent_hub.git import has_remote, remote_url
-from agent_hub.hub import Hub
-from agent_hub.state import load_state
+from agops.git import has_remote, remote_url
+from agops.hub import Hub
+from agops.state import load_state
 
 
 def test_has_remote(local_hub: Path, hub_repo: Path) -> None:

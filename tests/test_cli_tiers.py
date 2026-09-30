@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 from conftest import project
 
-from agent_hub import cli
-from agent_hub.hub import Hub
-from agent_hub.policy import policy_path
-from agent_hub.sessions import load_record, record_session
+from agops import cli
+from agops.hub import Hub
+from agops.policy import policy_path
+from agops.sessions import load_record, record_session
 
 TIERED_PLAN = """id: tiered
 title: Tiered
@@ -41,8 +41,8 @@ def test_brief_model_flag_declares_env_session(
     policy_hub: Path, tmp_path: Path, monkeypatch
 ) -> None:
     _activate(policy_hub, tmp_path)
-    monkeypatch.setenv("AGENT_HUB_SESSION", "cli-one")
-    monkeypatch.setenv("AGENT_HUB_ACTOR", "codex")
+    monkeypatch.setenv("AGOPS_SESSION", "cli-one")
+    monkeypatch.setenv("AGOPS_ACTOR", "codex")
     out = _run(policy_hub, "brief", "--cwd", "/tmp", "--model", "claude-sonnet-5")
     assert "Session: codex · claude-sonnet-5 · tier=standard" in out
     record = load_record("cli-one")
@@ -53,7 +53,7 @@ def test_brief_without_session_env_uses_the_terminal_session(
     policy_hub: Path, tmp_path: Path, monkeypatch
 ) -> None:
     _activate(policy_hub, tmp_path)
-    monkeypatch.delenv("AGENT_HUB_SESSION", raising=False)
+    monkeypatch.delenv("AGOPS_SESSION", raising=False)
     expected = f"shell-{os.getppid()}"
     assert cli.default_session() == expected
     assert cli.default_session() == expected
@@ -64,7 +64,7 @@ def test_brief_without_session_env_uses_the_terminal_session(
     event = _run(policy_hub, "task", "claim", "tiered", "exec", "--cwd", str(worktree))
     assert event["session"] == expected
     assert event["payload"]["tier"] == "standard"
-    monkeypatch.setenv("AGENT_HUB_SESSION", "explicit")
+    monkeypatch.setenv("AGOPS_SESSION", "explicit")
     assert cli.default_session() == "explicit"
 
 
@@ -95,10 +95,10 @@ def test_override_requires_tty_and_confirmation(
     with pytest.raises(ValueError, match="requires tier standard"):
         _run(policy_hub, *base)
 
-    monkeypatch.setenv("AGENT_HUB_AGENT_SESSION", "1")
+    monkeypatch.setenv("AGOPS_AGENT_SESSION", "1")
     with pytest.raises(ValueError, match="unavailable inside a managed agent session"):
         _run(policy_hub, *base, "--allow-tier-mismatch")
-    monkeypatch.delenv("AGENT_HUB_AGENT_SESSION")
+    monkeypatch.delenv("AGOPS_AGENT_SESSION")
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     with pytest.raises(ValueError, match="interactive terminal") as excinfo:
@@ -116,7 +116,7 @@ def test_override_requires_tty_and_confirmation(
 
 
 def test_policy_show_and_validate(policy_hub: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_SESSION", "one")
+    monkeypatch.setenv("AGOPS_SESSION", "one")
     record_session("one", "codex", "claude-sonnet-5", "standard")
     report = _run(policy_hub, "policy", "show")
     assert report["present"] is True and report["valid"] is True
@@ -152,7 +152,7 @@ def test_doctor_reports_absent_policy(hub_repo: Path) -> None:
 
 
 def test_mcp_brief_accepts_model_and_claim_has_no_override() -> None:
-    from agent_hub import mcp_server
+    from agops import mcp_server
 
     assert "model" in inspect.signature(mcp_server.hub_get_brief).parameters
     assert "allow_tier_mismatch" not in inspect.signature(mcp_server.hub_claim_task).parameters

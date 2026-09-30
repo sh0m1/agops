@@ -30,7 +30,7 @@ def hub_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     subprocess.run(["git", "init", "-b", "main", str(seed)], check=True, capture_output=True)
     git(seed, "config", "user.email", "test@example.com")
-    git(seed, "config", "user.name", "Agent Hub Test")
+    git(seed, "config", "user.name", "agops Test")
     (seed / "memory").mkdir()
     (seed / "memory" / "README.md").write_text("# Memory\n", encoding="utf-8")
     git(seed, "add", "memory")
@@ -43,10 +43,10 @@ def hub_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         capture_output=True,
     )
     git(runtime, "config", "user.email", "test@example.com")
-    git(runtime, "config", "user.name", "Agent Hub Test")
-    (runtime / ".agent-hub-managed").touch()
-    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
-    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
+    git(runtime, "config", "user.name", "agops Test")
+    (runtime / ".agops-managed").touch()
+    monkeypatch.setenv("AGOPS_TESTING", "1")
+    monkeypatch.setenv("AGOPS_LOCK_DIR", str(tmp_path / "locks"))
     return runtime
 
 
@@ -56,15 +56,15 @@ def local_hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     runtime = tmp_path / "local-runtime"
     subprocess.run(["git", "init", "-b", "main", str(runtime)], check=True, capture_output=True)
     git(runtime, "config", "user.email", "test@example.com")
-    git(runtime, "config", "user.name", "Agent Hub Test")
+    git(runtime, "config", "user.name", "agops Test")
     (runtime / "memory").mkdir()
     (runtime / "memory" / "README.md").write_text("# Memory\n", encoding="utf-8")
     git(runtime, "add", "memory")
     git(runtime, "commit", "-m", "init")
-    (runtime / ".agent-hub-managed").touch()
-    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
-    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
+    (runtime / ".agops-managed").touch()
+    monkeypatch.setenv("AGOPS_TESTING", "1")
+    monkeypatch.setenv("AGOPS_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
     return runtime
 
 
@@ -112,7 +112,7 @@ def project_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
 def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("AGENT_HUB_HOME", str(home))
+    monkeypatch.setenv("AGOPS_HOME", str(home))
     return home
 
 
@@ -125,7 +125,8 @@ def recording_runner() -> tuple[list[list[str]], Callable[..., subprocess.Comple
         if argv and argv[0] == "git":
             return subprocess.run(argv, **kwargs)  # type: ignore[arg-type]
         calls.append(list(argv))
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        code = 1 if argv[1:3] == ["mcp", "get"] else 0  # nothing pre-registered
+        return subprocess.CompletedProcess(argv, code, stdout="", stderr="")
 
     return calls, runner
 
@@ -136,9 +137,9 @@ def which_for(*names: str) -> Callable[[str], str | None]:
 
 @pytest.fixture
 def policy_hub(hub_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from agent_hub.hub import Hub
+    from agops.hub import Hub
 
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     Hub(hub_repo).ensure_policy()
     return hub_repo

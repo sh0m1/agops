@@ -9,7 +9,7 @@ ADAPTER_PATHS = {
     "claude": Path("CLAUDE.md"),
     "gemini": Path("GEMINI.md"),
     "copilot": Path(".github/copilot-instructions.md"),
-    "cursor": Path(".cursor/rules/agent-hub.mdc"),
+    "cursor": Path(".cursor/rules/agops.mdc"),
 }
 
 

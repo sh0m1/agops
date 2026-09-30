@@ -112,3 +112,27 @@ def test_fresh_home_needs_nothing(tmp_path: Path) -> None:
     _, runner = _runner(set())
     assert pending(tmp_path, which=which_for("claude"), runner=runner) == []
     assert migrate(tmp_path, which=which_for("claude"), runner=runner)["moved"] == []
+
+
+def test_reowns_notes_sidecar_of_moved_local_hub(tmp_path: Path) -> None:
+    import hashlib
+
+    home = tmp_path / "home"
+    _legacy_home(home)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    config = home / ".config" / LEGACY / "config.json"
+    data = json.loads(config.read_text())
+    data["profiles"]["default"]["notes_target"] = str(vault)
+    config.write_text(json.dumps(data))
+    old_repo = home / ".local" / "share" / LEGACY / "repo"
+    fingerprint = hashlib.sha256(f"local:{old_repo}".encode()).hexdigest()
+    sidecar = vault / ".agops-notes.json"
+    sidecar.write_text(json.dumps({"format_version": 1, "hub_fingerprint": fingerprint}))
+
+    report = migrate(home, which=which_for(), runner=_runner(set())[1])
+
+    new_repo = (home / ".local" / "share" / "agops" / "repo").resolve()
+    expected = hashlib.sha256(f"local:{new_repo}".encode()).hexdigest()
+    assert json.loads(sidecar.read_text())["hub_fingerprint"] == expected
+    assert report["notes_reowned"] == [str(sidecar)]

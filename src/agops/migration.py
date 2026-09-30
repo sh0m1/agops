@@ -8,6 +8,7 @@ warning is reported instead. This is the only module that may mention the legacy
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -89,6 +90,37 @@ def _rewrite_config(config_dir: Path, old_share: Path, new_share: Path) -> bool:
     return changed
 
 
+def _local_fingerprint(root: Path) -> str:
+    return hashlib.sha256(f"local:{root}".encode()).hexdigest()
+
+
+def _rewrite_notes_owners(config_dir: Path, old_share: Path, new_share: Path) -> list[str]:
+    """Re-own notes sidecars: a local hub's fingerprint is its path, which the move changed."""
+    path = config_dir / "config.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    profiles = data.get("profiles") if isinstance(data, dict) else None
+    updated: list[str] = []
+    for entry in profiles.values() if isinstance(profiles, dict) else []:
+        repo, target = entry.get("repo"), entry.get("notes_target")
+        if not (isinstance(repo, str) and isinstance(target, str)):
+            continue
+        repo_path = Path(repo)
+        if not repo_path.is_relative_to(new_share):
+            continue
+        sidecar = Path(target).expanduser() / ".agops-notes.json"
+        if not sidecar.is_file():
+            continue
+        notes = json.loads(sidecar.read_text(encoding="utf-8"))
+        old = _local_fingerprint(old_share / repo_path.relative_to(new_share))
+        if notes.get("hub_fingerprint") == old:
+            notes["hub_fingerprint"] = _local_fingerprint(repo_path.resolve())
+            sidecar.write_text(json.dumps(notes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            updated.append(str(sidecar))
+    return updated
+
+
 def _rename_markers(share: Path) -> list[str]:
     renamed: list[str] = []
     if not share.is_dir():
@@ -138,6 +170,7 @@ def migrate(
     share_moved = not old_share.exists() and new_share.exists()
     rewritten = share_moved and _rewrite_config(new_config, old_share, new_share)
     markers = _rename_markers(new_share) if share_moved else []
+    notes = _rewrite_notes_owners(new_config, old_share, new_share) if share_moved else []
     blocks = _rewrite_instruction_blocks(home)
     mcp_removed = []
     for tool in MCP_TOOLS:
@@ -148,6 +181,7 @@ def migrate(
         "moved": moved,
         "config_rewritten": bool(rewritten),
         "markers_renamed": markers,
+        "notes_reowned": notes,
         "instruction_blocks_updated": blocks,
         "mcp_removed": mcp_removed,
         "warnings": warnings,

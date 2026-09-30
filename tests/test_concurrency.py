@@ -6,9 +6,9 @@ from pathlib import Path
 
 from conftest import git, project
 
-from agent_hub.hub import Hub
-from agent_hub.sessions import record_session
-from agent_hub.state import load_state
+from agops.hub import Hub
+from agops.sessions import record_session
+from agops.state import load_state
 
 
 def test_remote_push_serializes_competing_claims(
@@ -27,8 +27,8 @@ def test_remote_push_serializes_competing_claims(
         capture_output=True,
     )
     git(second_path, "config", "user.email", "test@example.com")
-    git(second_path, "config", "user.name", "Agent Hub Test")
-    (second_path / ".agent-hub-managed").touch()
+    git(second_path, "config", "user.name", "agops Test")
+    (second_path / ".agops-managed").touch()
     second = Hub(second_path)
     first_worktree = project(tmp_path / "work-one")
     second_worktree = project(tmp_path / "work-two")
@@ -44,7 +44,7 @@ def test_remote_push_serializes_competing_claims(
         except Exception as exc:
             outcomes.append((actor, str(exc)))
 
-    monkeypatch.delenv("AGENT_HUB_LOCK_DIR")
+    monkeypatch.delenv("AGOPS_LOCK_DIR")
     threads = [
         threading.Thread(target=claim, args=(first, "codex", "one", str(first_worktree))),
         threading.Thread(target=claim, args=(second, "claude", "two", str(second_worktree))),
@@ -78,8 +78,8 @@ def test_only_matching_tier_can_win_a_race(
         capture_output=True,
     )
     git(second_path, "config", "user.email", "test@example.com")
-    git(second_path, "config", "user.name", "Agent Hub Test")
-    (second_path / ".agent-hub-managed").touch()
+    git(second_path, "config", "user.name", "agops Test")
+    (second_path / ".agops-managed").touch()
     second = Hub(second_path)
     first_worktree = project(tmp_path / "work-one")
     second_worktree = project(tmp_path / "work-two")
@@ -95,7 +95,7 @@ def test_only_matching_tier_can_win_a_race(
         except Exception as exc:
             outcomes[actor] = str(exc)
 
-    monkeypatch.delenv("AGENT_HUB_LOCK_DIR")
+    monkeypatch.delenv("AGOPS_LOCK_DIR")
     threads = [
         threading.Thread(target=claim, args=(first, "codex", "one", str(first_worktree))),
         threading.Thread(target=claim, args=(second, "claude", "two", str(second_worktree))),

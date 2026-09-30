@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.policy import (
+from agops.policy import (
     DEFAULT_POLICY_TEXT,
     UNKNOWN_TIER,
     PolicyError,

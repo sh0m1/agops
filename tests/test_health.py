@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_hub.health import doctor
-from agent_hub.hub import Hub
-from agent_hub.sessions import default_home
+from agops.health import doctor
+from agops.hub import Hub
+from agops.sessions import default_home
 
 
 def test_default_home_honours_environment(fake_home: Path) -> None:
@@ -49,8 +49,8 @@ def test_doctor_flags_pinned_codex_registration(local_hub: Path, fake_home: Path
     codex = fake_home / ".codex" / "config.toml"
     codex.parent.mkdir()
     codex.write_text(
-        '[mcp_servers.agent-hub]\ncommand = "x"\n\n[mcp_servers.agent-hub.env]\n'
-        'AGENT_HUB_REPO = "/old"\n'
+        '[mcp_servers.agops]\ncommand = "x"\n\n[mcp_servers.agops.env]\n'
+        'AGOPS_REPO = "/old"\n'
     )
     report = doctor(Hub(local_hub), home=fake_home, which=which_for("codex"))
     assert report["mcp_pinned"] == ["codex"]
@@ -61,12 +61,12 @@ def test_env_vars_forwarding_line_is_not_a_pinned_registration(
 ) -> None:
     from conftest import which_for
 
-    from agent_hub.setup import CODEX_FORWARDED_ENV
+    from agops.setup import CODEX_FORWARDED_ENV
 
     codex = fake_home / ".codex" / "config.toml"
     codex.parent.mkdir()
     codex.write_text(
-        "[mcp_servers.agent-hub]\n"
+        "[mcp_servers.agops]\n"
         f"env_vars = {CODEX_FORWARDED_ENV!s}\n"
         'command = "x"\n'
     )
@@ -75,7 +75,7 @@ def test_env_vars_forwarding_line_is_not_a_pinned_registration(
 
 
 def test_format_setup_summary_treats_informational_keys_as_such() -> None:
-    from agent_hub.cli import format_setup_summary
+    from agops.cli import format_setup_summary
 
     summary = {
         "ok": True,

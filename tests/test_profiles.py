@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 from conftest import which_for
 
-from agent_hub import cli
-from agent_hub.config import config_path, load_profiles
-from agent_hub.hub import Hub
-from agent_hub.setup import CODEX_FORWARDED_ENV, setup
+from agops import cli
+from agops.config import config_path, load_profiles
+from agops.hub import Hub
+from agops.setup import CODEX_FORWARDED_ENV, setup
 
 
 def _setup(home: Path, runner, *, profile: str | None = None, **kwargs):
@@ -18,7 +18,7 @@ def _setup(home: Path, runner, *, profile: str | None = None, **kwargs):
         kwargs.pop("remote", None),
         kwargs.pop("runtime", None),
         home=home,
-        which=kwargs.pop("which", which_for("agent-hub-mcp")),
+        which=kwargs.pop("which", which_for("agops-mcp")),
         runner=runner,
         profile=profile,
         **kwargs,
@@ -27,10 +27,10 @@ def _setup(home: Path, runner, *, profile: str | None = None, **kwargs):
 
 @pytest.fixture
 def isolated(tmp_path: Path, fake_home: Path, monkeypatch) -> Path:
-    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
-    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
-    monkeypatch.delenv("AGENT_HUB_PROFILE", raising=False)
-    monkeypatch.delenv("AGENT_HUB_REPO", raising=False)
+    monkeypatch.setenv("AGOPS_TESTING", "1")
+    monkeypatch.setenv("AGOPS_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.delenv("AGOPS_PROFILE", raising=False)
+    monkeypatch.delenv("AGOPS_REPO", raising=False)
     return fake_home
 
 
@@ -49,12 +49,12 @@ def test_two_profiles_team_and_private(isolated: Path, tmp_path: Path, recording
 
     team = _setup(isolated, runner, profile="team", remote=str(bare), make_default=True)
     assert team["profile"] == "team" and team["default_profile"] == "team"
-    assert team["runtime"] == str(isolated / ".local" / "share" / "agent-hub" / "team")
+    assert team["runtime"] == str(isolated / ".local" / "share" / "agops" / "team")
 
     private = _setup(isolated, runner, profile="private", local=True)
     assert private["profile"] == "private" and private["default_profile"] == "team"
     assert private["remote"] is None
-    assert private["runtime"] == str(isolated / ".local" / "share" / "agent-hub" / "private")
+    assert private["runtime"] == str(isolated / ".local" / "share" / "agops" / "private")
 
     profiles = load_profiles(isolated)
     assert profiles.default == "team"
@@ -98,20 +98,20 @@ def test_mcp_registration_is_not_pinned_and_codex_forwards_env(
     codex_config.parent.mkdir(parents=True)
     codex_config.write_text(
         'model = "x"\n\n[mcp_servers.other]\ncommand = "y"\n\n'
-        '[mcp_servers.agent-hub]\ncommand = "/fake/bin/agent-hub-mcp"\n\n[other]\nk = 1\n'
+        '[mcp_servers.agops]\ncommand = "/fake/bin/agops-mcp"\n\n[other]\nk = 1\n'
     )
-    _setup(isolated, runner, which=which_for("agent-hub-mcp", "claude", "codex"), local=True)
+    _setup(isolated, runner, which=which_for("agops-mcp", "claude", "codex"), local=True)
     adds = [argv for argv in calls if argv[1:3] == ["mcp", "add"]]
     assert len(adds) == 2
     for argv in adds:
         assert "--env" not in argv
-        assert not any(arg.startswith("AGENT_HUB_REPO=") for arg in argv)
+        assert not any(arg.startswith("AGOPS_REPO=") for arg in argv)
     text = codex_config.read_text()
-    section = text.split("[mcp_servers.agent-hub]\n", 1)[1].split("\n[", 1)[0]
+    section = text.split("[mcp_servers.agops]\n", 1)[1].split("\n[", 1)[0]
     assert f"env_vars = {json.dumps(CODEX_FORWARDED_ENV)}" in section
-    assert "AGENT_HUB_PROFILE" in CODEX_FORWARDED_ENV
+    assert "AGOPS_PROFILE" in CODEX_FORWARDED_ENV
     assert 'model = "x"' in text and "[other]\nk = 1" in text and "[mcp_servers.other]" in text
-    _setup(isolated, runner, which=which_for("agent-hub-mcp", "claude", "codex"), local=True)
+    _setup(isolated, runner, which=which_for("agops-mcp", "claude", "codex"), local=True)
     assert codex_config.read_text().count("env_vars") == 1
 
 
@@ -125,17 +125,17 @@ def test_brief_header_names_the_hub(
     header = hub.brief(Path("/tmp")).splitlines()[:5]
     assert "Hub: private · local only" in header
 
-    monkeypatch.setenv("AGENT_HUB_REPO", hub.root.as_posix())
-    monkeypatch.setenv("AGENT_HUB_PROFILE", "private")
+    monkeypatch.setenv("AGOPS_REPO", hub.root.as_posix())
+    monkeypatch.setenv("AGOPS_PROFILE", "private")
     overridden = Hub.from_environment()
     lines = overridden.brief(Path("/tmp")).splitlines()[:6]
     assert any(
-        line.startswith("Warning: AGENT_HUB_REPO overrides AGENT_HUB_PROFILE=private")
+        line.startswith("Warning: AGOPS_REPO overrides AGOPS_PROFILE=private")
         for line in lines
     )
 
-    monkeypatch.delenv("AGENT_HUB_REPO")
-    monkeypatch.setenv("AGENT_HUB_PROFILE", "nope")
+    monkeypatch.delenv("AGOPS_REPO")
+    monkeypatch.setenv("AGOPS_PROFILE", "nope")
     with pytest.raises(ValueError, match="Unknown hub profile"):
         Hub.from_environment()
 
@@ -160,7 +160,7 @@ def test_profile_cli(isolated: Path, tmp_path: Path, recording_runner, monkeypat
     with pytest.raises(ValueError, match="Unknown hub profile"):
         cli.dispatch(cli.build_parser().parse_args(["profile", "default", "nope"]))
 
-    monkeypatch.setenv("AGENT_HUB_PROFILE", "team")
+    monkeypatch.setenv("AGOPS_PROFILE", "team")
     listing = cli.dispatch(cli.build_parser().parse_args(["--json", "profile", "list"]))
     assert listing["current"] == "team" and listing["source"] == "env"
 

@@ -21,6 +21,7 @@ from .config import (
 from .git import has_remote, remote_url
 from .health import doctor
 from .hub import Hub
+from .migration import migrate
 from .sessions import default_home
 
 __all__ = [
@@ -32,8 +33,8 @@ __all__ = [
     "setup",
 ]
 
-MANAGED_START = "<!-- BEGIN AGENT HUB MANAGED -->"
-MANAGED_END = "<!-- END AGENT HUB MANAGED -->"
+MANAGED_START = "<!-- BEGIN AGOPS MANAGED -->"
+MANAGED_END = "<!-- END AGOPS MANAGED -->"
 INSTRUCTIONS = f"""{MANAGED_START}
 ## Shared agops hub
 
@@ -91,15 +92,15 @@ def render_instructions(hub: Hub | None) -> str:
 
 
 # Codex starts MCP servers with a whitelisted environment; these are forwarded explicitly so a
-# terminal's AGENT_HUB_* settings reach the server exactly as they do under Claude Code.
+# terminal's AGOPS_* settings reach the server exactly as they do under Claude Code.
 CODEX_FORWARDED_ENV = [
-    "AGENT_HUB_PROFILE",
-    "AGENT_HUB_REPO",
-    "AGENT_HUB_HOME",
-    "AGENT_HUB_STATE_DIR",
-    "AGENT_HUB_MODEL",
-    "AGENT_HUB_SESSION",
-    "AGENT_HUB_ACTOR",
+    "AGOPS_PROFILE",
+    "AGOPS_REPO",
+    "AGOPS_HOME",
+    "AGOPS_STATE_DIR",
+    "AGOPS_MODEL",
+    "AGOPS_SESSION",
+    "AGOPS_ACTOR",
 ]
 
 Which = Callable[[str], str | None]
@@ -144,16 +145,17 @@ def setup(
     if local and remote:
         raise ValueError("--local and --remote cannot be combined")
     home = (home or default_home()).expanduser()
+    migration = migrate(home, which=which, runner=runner)
     profiles = load_profiles(home)
     name = validate_profile_name(profile or profiles.default or "default")
     entry = profiles.profiles.get(name, {})
     runtime = (runtime or Path(entry.get("repo") or profile_runtime(name, home))).expanduser()
     runtime = runtime.resolve()
     remote = None if local else (remote or entry.get("remote"))
-    executable = which("agent-hub-mcp")
+    executable = which("agops-mcp")
     if not executable:
         raise RuntimeError(
-            "agent-hub-mcp is not installed on PATH; add ~/.local/bin to PATH (uv tool installs "
+            "agops-mcp is not installed on PATH; add ~/.local/bin to PATH (uv tool installs "
             "there) and re-run"
         )
 
@@ -170,7 +172,7 @@ def setup(
     elif remote and not has_remote(runtime):
         runner(["git", "-C", str(runtime), "remote", "add", "origin", remote], check=True)
         runner(["git", "-C", str(runtime), "push", "-q", "-u", "origin", "main"], check=True)
-    (runtime / ".agent-hub-managed").touch()
+    (runtime / ".agops-managed").touch()
     hub = Hub(runtime, profile=name)
     policy = "created" if hub.ensure_policy() else "already-present"
 
@@ -193,7 +195,7 @@ def setup(
     tools = {
         "codex": _replace_mcp(
             "codex",
-            ["codex", "mcp", "add", "agent-hub", "--", executable],
+            ["codex", "mcp", "add", "agops", "--", executable],
             which=which,
             runner=runner,
         ),
@@ -207,7 +209,7 @@ def setup(
                 "stdio",
                 "--scope",
                 "user",
-                "agent-hub",
+                "agops",
                 "--",
                 executable,
             ],
@@ -235,6 +237,7 @@ def setup(
         "scan": hub.scan(),
         "remote_removed": removed,
         "skills": skills,
+        "migration": migration,
     }
 
 
@@ -250,7 +253,7 @@ def _init_local_repo(runtime: Path, runner: Runner) -> None:
     )
 
 
-MEMORY_README = """# Agent Hub memory
+MEMORY_README = """# agops memory
 
 This directory is the canonical readable state. Do not edit event files or approved plan revisions
 in place; use the CLI or MCP tools so concurrent changes are validated and published atomically.
@@ -294,18 +297,18 @@ def _replace_mcp(
 ) -> str:
     if not which(tool):
         return "skipped-not-installed"
-    runner([tool, "mcp", "remove", "agent-hub"], check=False, capture_output=True)
+    runner([tool, "mcp", "remove", "agops"], check=False, capture_output=True)
     runner(add_command, check=True)
     return "configured"
 
 
 def _ensure_codex_env_vars(config: Path) -> bool:
-    """Insert or refresh `env_vars` in Codex's `[mcp_servers.agent-hub]` table. Idempotent."""
+    """Insert or refresh `env_vars` in Codex's `[mcp_servers.agops]` table. Idempotent."""
     if not config.exists():
         return False
     lines = config.read_text(encoding="utf-8").splitlines()
     try:
-        start = lines.index("[mcp_servers.agent-hub]")
+        start = lines.index("[mcp_servers.agops]")
     except ValueError:
         return False
     wanted = f"env_vars = {json.dumps(CODEX_FORWARDED_ENV)}"
@@ -340,8 +343,8 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
 
 
 def _packaged_skills() -> list[Path]:
-    """Every skill directory shipped inside the installed `agent_hub` package."""
-    root = Path(str(resources.files("agent_hub") / "skills"))
+    """Every skill directory shipped inside the installed `agops` package."""
+    root = Path(str(resources.files("agops") / "skills"))
     if not root.is_dir():
         return []
     return sorted(path for path in root.iterdir() if path.is_dir())

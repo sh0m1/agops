@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 from conftest import project
 
-from agent_hub import cli
-from agent_hub.hub import Hub
-from agent_hub.state import load_state
+from agops import cli
+from agops.hub import Hub
+from agops.state import load_state
 
 _REAL_RUN = cli.subprocess.run
 
@@ -54,7 +54,7 @@ def test_run_without_model_raises_under_policy(
     captured: dict = {}
     monkeypatch.setattr(cli.subprocess, "run", _fake_run(captured))
 
-    with pytest.raises(ValueError, match="agent-hub run needs --model"):
+    with pytest.raises(ValueError, match="agops run needs --model"):
         _dispatch(policy_hub, worktree)
 
     state = load_state(policy_hub)
@@ -75,7 +75,7 @@ def test_run_with_model_claims_and_exports_env(
 
     result = _dispatch(policy_hub, worktree, "--model", "claude-sonnet-5")
     assert result["exit_code"] == 0
-    assert captured["env"]["AGENT_HUB_MODEL"] == "claude-sonnet-5"
+    assert captured["env"]["AGOPS_MODEL"] == "claude-sonnet-5"
 
     state = load_state(hub.root)
     assert state.plans["shared-plan"].tasks["first"].model == "claude-sonnet-5"

@@ -6,12 +6,12 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-MODEL_ENV = "AGENT_HUB_MODEL"
-HOME_ENV = "AGENT_HUB_HOME"
+MODEL_ENV = "AGOPS_MODEL"
+HOME_ENV = "AGOPS_HOME"
 
 
 def default_home() -> Path:
-    """The user's home for tool configuration; AGENT_HUB_HOME overrides it (tests, sandboxes)."""
+    """The user's home for tool configuration; AGOPS_HOME overrides it (tests, sandboxes)."""
     configured = os.environ.get(HOME_ENV)
     return Path(configured).expanduser() if configured else Path.home()
 
@@ -26,10 +26,10 @@ class SessionRecord:
 
 
 def state_root() -> Path:
-    configured = os.environ.get("AGENT_HUB_STATE_DIR")
+    configured = os.environ.get("AGOPS_STATE_DIR")
     if configured:
         return Path(configured).expanduser()
-    return Path("~/.local/state/agent-hub").expanduser()
+    return Path("~/.local/state/agops").expanduser()
 
 
 def sessions_root() -> Path:

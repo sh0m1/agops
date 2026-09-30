@@ -6,8 +6,8 @@ import pytest
 import yaml
 from conftest import project
 
-from agent_hub.hub import Hub
-from agent_hub.security import validate_content
+from agops.hub import Hub
+from agops.security import validate_content
 
 
 def test_knowledge_is_searchable_and_in_brief(hub_repo: Path) -> None:

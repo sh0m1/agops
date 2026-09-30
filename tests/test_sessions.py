@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.sessions import (
+from agops.sessions import (
     load_record,
     record_session,
     resolve_model,
@@ -15,8 +15,8 @@ from agent_hub.sessions import (
 
 @pytest.fixture
 def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     return tmp_path / "state"
 
 
@@ -52,8 +52,8 @@ def test_resolution_order(state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> N
     record_session("abc", "codex", "from-record", "standard")
     assert resolve_model("abc") == "from-record"
     assert resolve_model("abc", "from-arg") == "from-arg"
-    monkeypatch.setenv("AGENT_HUB_MODEL", "from-env")
+    monkeypatch.setenv("AGOPS_MODEL", "from-env")
     assert resolve_model("abc", "from-arg") == "from-env"
     assert resolve_model(None) == "from-env"
-    monkeypatch.setenv("AGENT_HUB_MODEL", "   ")
+    monkeypatch.setenv("AGOPS_MODEL", "   ")
     assert resolve_model(None, " from-arg ") == "from-arg"

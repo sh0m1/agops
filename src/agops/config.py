@@ -11,8 +11,8 @@ from typing import Any
 
 from .sessions import default_home
 
-PROFILE_ENV = "AGENT_HUB_PROFILE"
-REPO_ENV = "AGENT_HUB_REPO"
+PROFILE_ENV = "AGOPS_PROFILE"
+REPO_ENV = "AGOPS_REPO"
 SCHEMA_VERSION = 3
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -32,7 +32,7 @@ class Resolution:
 
 
 def config_path(home: Path | None = None) -> Path:
-    return (home or default_home()) / ".config" / "agent-hub" / "config.json"
+    return (home or default_home()) / ".config" / "agops" / "config.json"
 
 
 def load_profiles(home: Path | None = None) -> Profiles:
@@ -78,14 +78,14 @@ def validate_profile_name(name: str) -> str:
 def profile_runtime(name: str, home: Path | None = None) -> Path:
     """Where a profile's runtime clone lives. `default` keeps the historical path."""
     validate_profile_name(name)
-    base = (home or default_home()) / ".local" / "share" / "agent-hub"
+    base = (home or default_home()) / ".local" / "share" / "agops"
     return base / ("repo" if name == "default" else name)
 
 
 def resolve_repo(explicit: str | None = None, home: Path | None = None) -> Resolution:
     """Pick the runtime repository for this process.
 
-    Order: explicit path (`--repo` / AGENT_HUB_REPO) → AGENT_HUB_PROFILE (must exist; fails closed)
+    Order: explicit path (`--repo` / AGOPS_REPO) → AGOPS_PROFILE (must exist; fails closed)
     → the config's default profile → the historical default path.
     """
     env_profile = os.environ.get(PROFILE_ENV, "").strip() or None

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.git import GitError
-from agent_hub.hub import Hub
-from agent_hub.state import load_state
+from agops.git import GitError
+from agops.hub import Hub
+from agops.state import load_state
 
 
 def activate(hub: Hub, plan_file: Path) -> None:
@@ -116,7 +116,7 @@ def test_checkpoint_queues_during_sync_failure_and_flushes_later(
     hub = Hub(hub_repo)
     activate(hub, plan_file)
     hub.claim_task("shared-plan", "first", "codex", "one", project_paths[0])
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
     mutate = hub._mutate
 
     def unavailable(_):

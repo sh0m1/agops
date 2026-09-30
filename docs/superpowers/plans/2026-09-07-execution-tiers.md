@@ -29,13 +29,13 @@
 
 | File | Responsibility |
 |---|---|
-| `src/agent_hub/policy.py` (new) | Parse and validate `tiers.yaml`; `TierPolicy.tier_for_model`, `TierPolicy.task_tier`; default file text; `load_policy`. |
-| `src/agent_hub/sessions.py` (new) | Local state root; session record read/write; `resolve_model` (env → explicit → record). |
-| `src/agent_hub/state.py` | `TaskState.model/tier/tier_override`; replay from `task_claimed`; `validate_plan(plan, policy)`. |
-| `src/agent_hub/hub.py` | `Hub.policy()`, `Hub.ensure_policy()`, scan validates policy, `brief` declares and filters, `claim_task` enforces and stamps. `_outbox_root` uses `sessions.state_root`. |
-| `src/agent_hub/cli.py` | `brief --model`, `task claim --allow-tier-mismatch`, `task ready --tier`, `policy show|validate`, doctor policy check. |
-| `src/agent_hub/mcp_server.py` | `hub_get_brief(cwd, model)`. |
-| `src/agent_hub/setup.py` | Instruction sentence; `setup()` calls `Hub.ensure_policy()`. |
+| `src/agops/policy.py` (new) | Parse and validate `tiers.yaml`; `TierPolicy.tier_for_model`, `TierPolicy.task_tier`; default file text; `load_policy`. |
+| `src/agops/sessions.py` (new) | Local state root; session record read/write; `resolve_model` (env → explicit → record). |
+| `src/agops/state.py` | `TaskState.model/tier/tier_override`; replay from `task_claimed`; `validate_plan(plan, policy)`. |
+| `src/agops/hub.py` | `Hub.policy()`, `Hub.ensure_policy()`, scan validates policy, `brief` declares and filters, `claim_task` enforces and stamps. `_outbox_root` uses `sessions.state_root`. |
+| `src/agops/cli.py` | `brief --model`, `task claim --allow-tier-mismatch`, `task ready --tier`, `policy show|validate`, doctor policy check. |
+| `src/agops/mcp_server.py` | `hub_get_brief(cwd, model)`. |
+| `src/agops/setup.py` | Instruction sentence; `setup()` calls `Hub.ensure_policy()`. |
 | `docs/protocol.md`, `README.md` | Execution tiers section; `--model` in workflow. |
 | `tests/test_policy.py` (new), `tests/test_sessions.py` (new), `tests/test_tiers.py` (new) | New behaviour. Existing test files gain small additions where noted. |
 
@@ -44,11 +44,11 @@
 ### Task 1: Policy module
 
 **Files:**
-- Create: `src/agent_hub/policy.py`
+- Create: `src/agops/policy.py`
 - Test: `tests/test_policy.py`
 
 **Interfaces:**
-- Consumes: `agent_hub.ids.slug(value: str) -> str`.
+- Consumes: `agops.ids.slug(value: str) -> str`.
 - Produces:
   - `POLICY_RELATIVE_PATH: Path` = `Path("memory") / "policy" / "tiers.yaml"`
   - `UNKNOWN_TIER: str` = `"unknown"`
@@ -69,7 +69,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.policy import (
+from agops.policy import (
     DEFAULT_POLICY_TEXT,
     UNKNOWN_TIER,
     PolicyError,
@@ -148,12 +148,12 @@ def test_load_policy_absent_and_invalid(tmp_path: Path) -> None:
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_policy.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'agent_hub.policy'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'agops.policy'`
 
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# src/agent_hub/policy.py
+# src/agops/policy.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -267,7 +267,7 @@ Expected: all PASS, ruff clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent_hub/policy.py tests/test_policy.py
+git add src/agops/policy.py tests/test_policy.py
 git commit -m "feat: add tier policy parsing and model-to-tier resolution"
 ```
 
@@ -276,15 +276,15 @@ git commit -m "feat: add tier policy parsing and model-to-tier resolution"
 ### Task 2: Session records and model resolution
 
 **Files:**
-- Create: `src/agent_hub/sessions.py`
-- Modify: `src/agent_hub/hub.py:617-624` (`_outbox_root`)
+- Create: `src/agops/sessions.py`
+- Modify: `src/agops/hub.py:617-624` (`_outbox_root`)
 - Test: `tests/test_sessions.py`
 
 **Interfaces:**
 - Produces:
-  - `MODEL_ENV: str` = `"AGENT_HUB_MODEL"`
+  - `MODEL_ENV: str` = `"AGOPS_MODEL"`
   - `@dataclass(frozen=True) class SessionRecord: session: str; actor: str; model: str; tier: str | None; declared_at: str`
-  - `state_root() -> Path` (honours `AGENT_HUB_STATE_DIR`, default `~/.local/state/agent-hub`)
+  - `state_root() -> Path` (honours `AGOPS_STATE_DIR`, default `~/.local/state/agent-hub`)
   - `sessions_root() -> Path` = `state_root() / "sessions"`
   - `load_record(session: str) -> SessionRecord | None`
   - `record_session(session: str, actor: str, model: str, tier: str | None) -> SessionRecord`
@@ -300,7 +300,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.sessions import (
+from agops.sessions import (
     load_record,
     record_session,
     resolve_model,
@@ -311,8 +311,8 @@ from agent_hub.sessions import (
 
 @pytest.fixture
 def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     return tmp_path / "state"
 
 
@@ -348,22 +348,22 @@ def test_resolution_order(state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> N
     record_session("abc", "codex", "from-record", "standard")
     assert resolve_model("abc") == "from-record"
     assert resolve_model("abc", "from-arg") == "from-arg"
-    monkeypatch.setenv("AGENT_HUB_MODEL", "from-env")
+    monkeypatch.setenv("AGOPS_MODEL", "from-env")
     assert resolve_model("abc", "from-arg") == "from-env"
     assert resolve_model(None) == "from-env"
-    monkeypatch.setenv("AGENT_HUB_MODEL", "   ")
+    monkeypatch.setenv("AGOPS_MODEL", "   ")
     assert resolve_model(None, " from-arg ") == "from-arg"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `uv run pytest tests/test_sessions.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'agent_hub.sessions'`
+Expected: FAIL with `ModuleNotFoundError: No module named 'agops.sessions'`
 
 - [ ] **Step 3: Write the implementation**
 
 ```python
-# src/agent_hub/sessions.py
+# src/agops/sessions.py
 from __future__ import annotations
 
 import json
@@ -372,7 +372,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-MODEL_ENV = "AGENT_HUB_MODEL"
+MODEL_ENV = "AGOPS_MODEL"
 
 
 @dataclass(frozen=True)
@@ -385,7 +385,7 @@ class SessionRecord:
 
 
 def state_root() -> Path:
-    configured = os.environ.get("AGENT_HUB_STATE_DIR")
+    configured = os.environ.get("AGOPS_STATE_DIR")
     if configured:
         return Path(configured).expanduser()
     return Path("~/.local/state/agent-hub").expanduser()
@@ -435,7 +435,7 @@ def resolve_model(session: str | None, explicit: str | None = None) -> str | Non
     return None
 ```
 
-Then in `src/agent_hub/hub.py`, replace `_outbox_root` so both the outbox and session records share one root. Add `from .sessions import state_root` to the imports and change the method body to:
+Then in `src/agops/hub.py`, replace `_outbox_root` so both the outbox and session records share one root. Add `from .sessions import state_root` to the imports and change the method body to:
 
 ```python
     def _outbox_root(self) -> Path:
@@ -452,7 +452,7 @@ Expected: all PASS (including the existing outbox test `test_checkpoint_queues_d
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent_hub/sessions.py src/agent_hub/hub.py tests/test_sessions.py
+git add src/agops/sessions.py src/agops/hub.py tests/test_sessions.py
 git commit -m "feat: add local session model declarations"
 ```
 
@@ -461,11 +461,11 @@ git commit -m "feat: add local session model declarations"
 ### Task 3: State replay and plan validation
 
 **Files:**
-- Modify: `src/agent_hub/state.py:20-35` (`TaskState`), `:78-84` (claim replay), `:149-170` (`validate_plan`)
+- Modify: `src/agops/state.py:20-35` (`TaskState`), `:78-84` (claim replay), `:149-170` (`validate_plan`)
 - Test: `tests/test_tiers.py` (new file; later tasks append to it)
 
 **Interfaces:**
-- Consumes: `agent_hub.policy.TierPolicy`, `parse_policy`, `DEFAULT_POLICY_TEXT`.
+- Consumes: `agops.policy.TierPolicy`, `parse_policy`, `DEFAULT_POLICY_TEXT`.
 - Produces:
   - `TaskState.model: str | None`, `TaskState.tier: str | None`, `TaskState.tier_override: bool`
   - `validate_plan(plan: dict[str, Any], policy: TierPolicy | None = None) -> None`
@@ -478,8 +478,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_hub.policy import DEFAULT_POLICY_TEXT, parse_policy
-from agent_hub.state import State, validate_plan
+from agops.policy import DEFAULT_POLICY_TEXT, parse_policy
+from agops.state import State, validate_plan
 
 
 def _claim_event(payload: dict) -> dict:
@@ -561,7 +561,7 @@ Expected: `test_claim_replay_records_model_and_tier` FAILS with `AttributeError:
 
 - [ ] **Step 3: Implement**
 
-In `src/agent_hub/state.py`:
+In `src/agops/state.py`:
 
 Add the import at the top (after `import yaml`):
 
@@ -642,7 +642,7 @@ Expected: all PASS, ruff clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent_hub/state.py tests/test_tiers.py
+git add src/agops/state.py tests/test_tiers.py
 git commit -m "feat: replay model and tier from claims; validate task tiers"
 ```
 
@@ -651,16 +651,16 @@ git commit -m "feat: replay model and tier from claims; validate task tiers"
 ### Task 4: Hub loads, initializes, and scans the policy
 
 **Files:**
-- Modify: `src/agent_hub/hub.py` (imports; `scan`; `draft_plan`; new `policy`, `ensure_policy`)
+- Modify: `src/agops/hub.py` (imports; `scan`; `draft_plan`; new `policy`, `ensure_policy`)
 - Modify: `tests/conftest.py` (new `policy_hub` fixture)
 - Test: `tests/test_tiers.py` (append)
 
 **Interfaces:**
-- Consumes: `load_policy`, `parse_policy`, `policy_path`, `DEFAULT_POLICY_TEXT`, `POLICY_RELATIVE_PATH`, `PolicyError` from `agent_hub.policy`.
+- Consumes: `load_policy`, `parse_policy`, `policy_path`, `DEFAULT_POLICY_TEXT`, `POLICY_RELATIVE_PATH`, `PolicyError` from `agops.policy`.
 - Produces:
   - `Hub.policy() -> TierPolicy | None`
   - `Hub.ensure_policy() -> dict[str, Any] | None` (returns the `policy_initialized` event, or None if the file already existed)
-  - fixture `policy_hub` (a `hub_repo` with the default policy committed and `AGENT_HUB_STATE_DIR` isolated)
+  - fixture `policy_hub` (a `hub_repo` with the default policy committed and `AGOPS_STATE_DIR` isolated)
 
 - [ ] **Step 1: Add the fixture and failing tests**
 
@@ -669,10 +669,10 @@ Append to `tests/conftest.py`:
 ```python
 @pytest.fixture
 def policy_hub(hub_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    from agent_hub.hub import Hub
+    from agops.hub import Hub
 
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     Hub(hub_repo).ensure_policy()
     return hub_repo
 ```
@@ -682,8 +682,8 @@ Append to `tests/test_tiers.py`:
 ```python
 from pathlib import Path
 
-from agent_hub.hub import Hub
-from agent_hub.policy import PolicyError, policy_path
+from agops.hub import Hub
+from agops.policy import PolicyError, policy_path
 
 
 def test_ensure_policy_writes_and_publishes_default(hub_repo: Path) -> None:
@@ -729,7 +729,7 @@ Expected: the three new tests FAIL with `AttributeError: 'Hub' object has no att
 
 - [ ] **Step 3: Implement**
 
-In `src/agent_hub/hub.py` imports, add:
+In `src/agops/hub.py` imports, add:
 
 ```python
 from .policy import (
@@ -786,7 +786,7 @@ Expected: all PASS, ruff clean.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent_hub/hub.py tests/conftest.py tests/test_tiers.py
+git add src/agops/hub.py tests/conftest.py tests/test_tiers.py
 git commit -m "feat: load, initialize, and scan the tier policy"
 ```
 
@@ -795,11 +795,11 @@ git commit -m "feat: load, initialize, and scan the tier policy"
 ### Task 5: Brief declares the session and filters by tier
 
 **Files:**
-- Modify: `src/agent_hub/hub.py:514-561` (`brief`)
+- Modify: `src/agops/hub.py:514-561` (`brief`)
 - Test: `tests/test_tiers.py` (append)
 
 **Interfaces:**
-- Consumes: `resolve_model`, `record_session` from `agent_hub.sessions`; `UNKNOWN_TIER` from `agent_hub.policy`; `Hub.policy()`.
+- Consumes: `resolve_model`, `record_session` from `agops.sessions`; `UNKNOWN_TIER` from `agops.policy`; `Hub.policy()`.
 - Produces: `Hub.brief(cwd: Path, max_bytes: int = 12_000, model: str | None = None, actor: str = "agent", session: str | None = None) -> str`
 
 Header lines produced (exact text):
@@ -815,7 +815,7 @@ Hidden-task line, per plan, only when a policy exists and the session tier is kn
 Append to `tests/test_tiers.py`:
 
 ```python
-from agent_hub.sessions import load_record
+from agops.sessions import load_record
 
 TIERED_PLAN = """id: tiered
 title: Tiered
@@ -884,8 +884,8 @@ def test_brief_unmapped_model_warns_and_hides_nothing(policy_hub: Path, tmp_path
 
 
 def test_brief_without_policy_is_unenforced(hub_repo: Path, tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     hub = Hub(hub_repo)
     _activate_tiered(hub, tmp_path)
     brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
@@ -894,7 +894,7 @@ def test_brief_without_policy_is_unenforced(hub_repo: Path, tmp_path: Path, monk
 
 
 def test_env_model_overrides_argument(policy_hub: Path, tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_MODEL", "claude-opus-5")
+    monkeypatch.setenv("AGOPS_MODEL", "claude-opus-5")
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
     brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
@@ -1013,7 +1013,7 @@ Expected: all PASS (the existing `test_knowledge` brief tests pass unchanged bec
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent_hub/hub.py tests/test_tiers.py
+git add src/agops/hub.py tests/test_tiers.py
 git commit -m "feat: brief declares session model and filters tasks by tier"
 ```
 
@@ -1022,7 +1022,7 @@ git commit -m "feat: brief declares session model and filters tasks by tier"
 ### Task 6: Claim enforcement
 
 **Files:**
-- Modify: `src/agent_hub/hub.py:269-327` (`claim_task`)
+- Modify: `src/agops/hub.py:269-327` (`claim_task`)
 - Test: `tests/test_tiers.py` (append), `tests/test_concurrency.py` (append)
 
 **Interfaces:**
@@ -1036,8 +1036,8 @@ Append to `tests/test_tiers.py`:
 ```python
 from conftest import project
 
-from agent_hub.sessions import record_session
-from agent_hub.state import load_state
+from agops.sessions import record_session
+from agops.state import load_state
 
 
 def test_matching_tier_claims_and_stamps_event(policy_hub: Path, tmp_path: Path) -> None:
@@ -1109,8 +1109,8 @@ def test_invalid_policy_rejects_every_claim(policy_hub: Path, tmp_path: Path) ->
 def test_without_policy_claims_record_model_and_null_tier(
     hub_repo: Path, tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("AGENT_HUB_STATE_DIR", str(tmp_path / "state"))
-    monkeypatch.delenv("AGENT_HUB_MODEL", raising=False)
+    monkeypatch.setenv("AGOPS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
     hub = Hub(hub_repo)
     _activate_tiered(hub, tmp_path)
     worktree = project(tmp_path / "work")
@@ -1130,7 +1130,7 @@ Append to `tests/test_concurrency.py`:
 def test_only_matching_tier_can_win_a_race(
     policy_hub: Path, plan_file: Path, tmp_path: Path, monkeypatch
 ) -> None:
-    from agent_hub.sessions import record_session
+    from agops.sessions import record_session
 
     first = Hub(policy_hub)
     first.draft_plan(plan_file, "codex", "draft")
@@ -1164,7 +1164,7 @@ def test_only_matching_tier_can_win_a_race(
         except Exception as exc:
             outcomes[actor] = str(exc)
 
-    monkeypatch.delenv("AGENT_HUB_LOCK_DIR")
+    monkeypatch.delenv("AGOPS_LOCK_DIR")
     threads = [
         threading.Thread(target=claim, args=(first, "codex", "one", str(first_worktree))),
         threading.Thread(target=claim, args=(second, "claude", "two", str(second_worktree))),
@@ -1294,7 +1294,7 @@ Expected: all PASS, ruff clean. The pre-existing `test_remote_push_serializes_co
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/agent_hub/hub.py tests/test_tiers.py tests/test_concurrency.py
+git add src/agops/hub.py tests/test_tiers.py tests/test_concurrency.py
 git commit -m "feat: enforce execution tiers on claim and record model on the event"
 ```
 
@@ -1303,18 +1303,18 @@ git commit -m "feat: enforce execution tiers on claim and record model on the ev
 ### Task 7: CLI, MCP, setup, and doctor surface
 
 **Files:**
-- Modify: `src/agent_hub/cli.py` (parser, dispatch, `doctor`, `require_human_confirmation`, new `policy_report`)
-- Modify: `src/agent_hub/mcp_server.py:26-29` (`hub_get_brief`)
-- Modify: `src/agent_hub/setup.py:41-49` (`setup` calls `ensure_policy`)
+- Modify: `src/agops/cli.py` (parser, dispatch, `doctor`, `require_human_confirmation`, new `policy_report`)
+- Modify: `src/agops/mcp_server.py:26-29` (`hub_get_brief`)
+- Modify: `src/agops/setup.py:41-49` (`setup` calls `ensure_policy`)
 - Test: `tests/test_cli_tiers.py` (new)
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–6.
 - Produces:
-  - `agent-hub brief --cwd DIR [--model ID]`
-  - `agent-hub task claim PLAN TASK [--allow-tier-mismatch]`
-  - `agent-hub task ready [--plan ID] [--tier NAME]`
-  - `agent-hub policy show` / `agent-hub policy validate`
+  - `agops brief --cwd DIR [--model ID]`
+  - `agops task claim PLAN TASK [--allow-tier-mismatch]`
+  - `agops task ready [--plan ID] [--tier NAME]`
+  - `agops policy show` / `agops policy validate`
   - `doctor()["policy"]` ∈ `"ok" | "absent" | "invalid: <message>"`
   - `require_human_confirmation(identifier: str, yes: bool, action: str, noun: str = "plan") -> None`
   - `policy_report(hub: Hub, validate_only: bool) -> dict[str, Any]`
@@ -1334,10 +1334,10 @@ from pathlib import Path
 import pytest
 from conftest import project
 
-from agent_hub import cli
-from agent_hub.hub import Hub
-from agent_hub.policy import policy_path
-from agent_hub.sessions import load_record, record_session
+from agops import cli
+from agops.hub import Hub
+from agops.policy import policy_path
+from agops.sessions import load_record, record_session
 
 TIERED_PLAN = """id: tiered
 title: Tiered
@@ -1364,8 +1364,8 @@ def _activate(hub_repo: Path, tmp_path: Path) -> Hub:
 
 def test_brief_model_flag_declares_env_session(policy_hub: Path, tmp_path: Path, monkeypatch) -> None:
     _activate(policy_hub, tmp_path)
-    monkeypatch.setenv("AGENT_HUB_SESSION", "cli-one")
-    monkeypatch.setenv("AGENT_HUB_ACTOR", "codex")
+    monkeypatch.setenv("AGOPS_SESSION", "cli-one")
+    monkeypatch.setenv("AGOPS_ACTOR", "codex")
     out = _run(policy_hub, "brief", "--cwd", "/tmp", "--model", "claude-sonnet-5")
     assert "Session: codex · claude-sonnet-5 · tier=standard" in out
     record = load_record("cli-one")
@@ -1376,9 +1376,9 @@ def test_brief_without_session_env_does_not_write_a_record(
     policy_hub: Path, tmp_path: Path, monkeypatch
 ) -> None:
     _activate(policy_hub, tmp_path)
-    monkeypatch.delenv("AGENT_HUB_SESSION", raising=False)
+    monkeypatch.delenv("AGOPS_SESSION", raising=False)
     _run(policy_hub, "brief", "--cwd", "/tmp", "--model", "claude-sonnet-5")
-    from agent_hub.sessions import sessions_root
+    from agops.sessions import sessions_root
 
     assert not sessions_root().exists() or not list(sessions_root().iterdir())
 
@@ -1401,10 +1401,10 @@ def test_override_requires_tty_and_confirmation(policy_hub: Path, tmp_path: Path
     with pytest.raises(ValueError, match="requires tier standard"):
         _run(policy_hub, *base)
 
-    monkeypatch.setenv("AGENT_HUB_AGENT_SESSION", "1")
+    monkeypatch.setenv("AGOPS_AGENT_SESSION", "1")
     with pytest.raises(ValueError, match="unavailable inside a managed agent session"):
         _run(policy_hub, *base, "--allow-tier-mismatch")
-    monkeypatch.delenv("AGENT_HUB_AGENT_SESSION")
+    monkeypatch.delenv("AGOPS_AGENT_SESSION")
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     with pytest.raises(ValueError, match="interactive terminal"):
@@ -1421,7 +1421,7 @@ def test_override_requires_tty_and_confirmation(policy_hub: Path, tmp_path: Path
 
 
 def test_policy_show_and_validate(policy_hub: Path, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_SESSION", "one")
+    monkeypatch.setenv("AGOPS_SESSION", "one")
     record_session("one", "codex", "claude-sonnet-5", "standard")
     report = _run(policy_hub, "policy", "show")
     assert report["present"] is True and report["valid"] is True
@@ -1457,7 +1457,7 @@ def test_doctor_reports_absent_policy(hub_repo: Path) -> None:
 
 
 def test_mcp_brief_accepts_model_and_claim_has_no_override() -> None:
-    from agent_hub import mcp_server
+    from agops import mcp_server
 
     assert "model" in inspect.signature(mcp_server.hub_get_brief).parameters
     assert "allow_tier_mismatch" not in inspect.signature(mcp_server.hub_claim_task).parameters
@@ -1472,7 +1472,7 @@ Expected: FAIL with `argparse` errors (`unrecognized arguments: --model`, `inval
 
 - [ ] **Step 3: Implement the CLI**
 
-In `src/agent_hub/cli.py` imports, add:
+In `src/agops/cli.py` imports, add:
 
 ```python
 from .policy import PolicyError, policy_path
@@ -1516,8 +1516,8 @@ In `dispatch`, replace the `brief` branch:
         return hub.brief(
             Path(args.cwd),
             model=args.model,
-            actor=os.environ.get("AGENT_HUB_ACTOR", "agent"),
-            session=os.environ.get("AGENT_HUB_SESSION") or None,
+            actor=os.environ.get("AGOPS_ACTOR", "agent"),
+            session=os.environ.get("AGOPS_SESSION") or None,
         )
     if args.command == "policy":
         return policy_report(hub, validate_only=args.policy_command == "validate")
@@ -1540,7 +1540,7 @@ Replace the `task ready` and `task claim` branches:
         actor, session = actor_session(args)
         if args.task_command == "claim":
             if args.allow_tier_mismatch:
-                if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+                if os.environ.get("AGOPS_AGENT_SESSION"):
                     raise ValueError("Tier override is unavailable inside a managed agent session")
                 require_human_confirmation(args.task_id, False, "override tier for", noun="task")
             return hub.claim_task(
@@ -1611,7 +1611,7 @@ def policy_report(hub: Hub, validate_only: bool) -> dict[str, Any]:
         return report
     report["default_task_tier"] = policy.default_task_tier
     report["tiers"] = {name: list(patterns) for name, patterns in policy.tiers.items()}
-    session = os.environ.get("AGENT_HUB_SESSION") or None
+    session = os.environ.get("AGOPS_SESSION") or None
     model = resolve_model(session)
     report["session"] = {
         "session": session,
@@ -1625,7 +1625,7 @@ Note: the `plan cancel` branch already calls `require_human_confirmation(args.pl
 
 - [ ] **Step 4: Implement MCP and setup**
 
-`src/agent_hub/mcp_server.py`:
+`src/agops/mcp_server.py`:
 
 ```python
 @mcp.tool()
@@ -1638,7 +1638,7 @@ def hub_get_brief(cwd: str = ".", model: str | None = None) -> str:
     return hub().brief(Path(cwd), model=model, actor=ACTOR, session=SESSION)
 ```
 
-`src/agent_hub/setup.py`: add `from .hub import Hub` to the imports, and in `setup()` insert directly after `(runtime / ".agent-hub-managed").touch()`:
+`src/agops/setup.py`: add `from .hub import Hub` to the imports, and in `setup()` insert directly after `(runtime / ".agent-hub-managed").touch()`:
 
 ```python
     Hub(runtime).ensure_policy()
@@ -1652,7 +1652,7 @@ Expected: all PASS, ruff clean.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/agent_hub/cli.py src/agent_hub/mcp_server.py src/agent_hub/setup.py tests/test_cli_tiers.py
+git add src/agops/cli.py src/agops/mcp_server.py src/agops/setup.py tests/test_cli_tiers.py
 git commit -m "feat: expose execution tiers through the CLI, MCP brief, setup, and doctor"
 ```
 
@@ -1661,7 +1661,7 @@ git commit -m "feat: expose execution tiers through the CLI, MCP brief, setup, a
 ### Task 8: Instructions and documentation
 
 **Files:**
-- Modify: `src/agent_hub/setup.py:11-21` (`INSTRUCTIONS`)
+- Modify: `src/agops/setup.py:11-21` (`INSTRUCTIONS`)
 - Modify: `tests/test_setup.py`
 - Modify: `docs/protocol.md`, `README.md`
 
@@ -1686,15 +1686,15 @@ Expected: `test_managed_instructions_require_a_model_declaration` FAILS with `As
 
 - [ ] **Step 3: Update the instruction block**
 
-Replace `INSTRUCTIONS` in `src/agent_hub/setup.py`:
+Replace `INSTRUCTIONS` in `src/agops/setup.py`:
 
 ```python
 INSTRUCTIONS = f"""{MANAGED_START}
 ## Shared Agent Hub
 
-At the start of each work session, call `agent-hub brief --cwd \"$PWD\"` or the MCP
+At the start of each work session, call `agops brief --cwd \"$PWD\"` or the MCP
 `hub_get_brief` tool. Pass your current model id to `hub_get_brief` (or
-`agent-hub brief --model`) at session start and again if the model changes; claims are limited
+`agops brief --model`) at session start and again if the model changes; claims are limited
 to tasks matching your tier. Before modifying files for an approved shared plan, claim a ready
 task. Checkpoint meaningful progress and before handoff or context compaction. Complete tasks
 only with test, artifact, or commit evidence. Never store credentials, `.env` contents, or raw
@@ -1730,13 +1730,13 @@ tiers:
 
 Patterns are case-insensitive globs. A model matching no tier is `unknown` and cannot claim. A
 model matching two tiers is a validation error. `setup` writes the default file; edit it in any
-editor and commit — `scan`, `doctor`, and `agent-hub policy validate` check it.
+editor and commit — `scan`, `doctor`, and `agops policy validate` check it.
 
 Tasks take an optional `tier`; a missing value means `default_task_tier`. A `tier` not defined in
 the policy is rejected at draft time.
 
 Sessions declare their model by passing it to `brief` / `hub_get_brief`. The resolution order is
-the `AGENT_HUB_MODEL` environment variable, then the `model` argument, then the record saved by
+the `AGOPS_MODEL` environment variable, then the `model` argument, then the record saved by
 an earlier brief for the same session id. Records live in the local state directory and are
 never committed. A declared brief lists only tasks of the session's tier and reports how many
 tasks of other tiers were hidden.
@@ -1745,7 +1745,7 @@ A claim is rejected when the session is undeclared, when its model is unmapped, 
 differs from the task's tier. The claim event records `model`, `tier`, and `tier_override`.
 Heartbeats, checkpoints, and completion do not re-check the tier; the guard is at pickup.
 
-`agent-hub task claim … --allow-tier-mismatch` bypasses the comparison. It is refused in managed
+`agops task claim … --allow-tier-mismatch` bypasses the comparison. It is refused in managed
 agent sessions and non-interactive terminals, requires typing the task id, and is not available
 through MCP.
 
@@ -1760,8 +1760,8 @@ Also add `tier: standard` to the example task in the existing `## Plan schema` b
 In `README.md`, replace the "Everyday workflow" code block with:
 
 ```sh
-export AGENT_HUB_ACTOR=codex
-export AGENT_HUB_SESSION="$(agent-hub session --actor codex --value)"
+export AGOPS_ACTOR=codex
+export AGOPS_SESSION="$(agent-hub session --actor codex --value)"
 agent-hub brief --cwd "$PWD" --model gpt-5.6-terra
 agent-hub plan list
 agent-hub task ready --tier standard
@@ -1786,7 +1786,7 @@ Expected: all tests PASS, ruff clean, build succeeds.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/agent_hub/setup.py tests/test_setup.py docs/protocol.md README.md
+git add src/agops/setup.py tests/test_setup.py docs/protocol.md README.md
 git commit -m "docs: describe execution tiers and require model declaration in instructions"
 ```
 

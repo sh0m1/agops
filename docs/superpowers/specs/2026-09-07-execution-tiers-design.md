@@ -59,7 +59,7 @@ Rules:
 - A model that matches no tier resolves to the pseudo-tier `unknown`. Sessions on an unknown
   model cannot claim anything; the error names the model so the fix is one line in this file.
 
-Validation runs in `scan`, `doctor`, and a new `agent-hub policy validate`.
+Validation runs in `scan`, `doctor`, and a new `agops policy validate`.
 
 File states:
 
@@ -91,7 +91,7 @@ tasks:
 ### 3. Session declaration
 
 Declaration is local state, not a committed event. The record lives at
-`<AGENT_HUB_STATE_DIR or ~/.local/state/agent-hub>/sessions/<session-id>.json`:
+`<AGOPS_STATE_DIR or ~/.local/state/agent-hub>/sessions/<session-id>.json`:
 
 ```json
 {
@@ -105,7 +105,7 @@ Declaration is local state, not a committed event. The record lives at
 
 Model resolution order for a session, first hit wins:
 
-1. `AGENT_HUB_MODEL` environment variable.
+1. `AGOPS_MODEL` environment variable.
 2. `model` argument passed to `brief` / `hub_get_brief`.
 3. Existing session record on disk.
 4. None: the session is undeclared.
@@ -114,7 +114,7 @@ Tier is always derived from the resolved model and the current `tiers.yaml` at t
 use; the `tier` stored in the record is informational and is refreshed on every brief.
 
 The brief is the declaration point. `hub_get_brief(cwd=".", model=None)` and
-`agent-hub brief --cwd … [--model ID]`:
+`agops brief --cwd … [--model ID]`:
 
 - When a model resolves, write or refresh the session record.
 - Header line: `Session: <actor> · <model> · tier=<tier>`, or when undeclared:
@@ -128,9 +128,9 @@ mid-session model switch is reported. No dedicated declare tool is added; the on
 required at session start covers it.
 
 Session identity caveat: MCP sessions have a stable session id for the life of the server
-process, so the record is found. CLI calls without `AGENT_HUB_SESSION` exported get a fresh
+process, so the record is found. CLI calls without `AGOPS_SESSION` exported get a fresh
 UUID per call, will not find a record, and will be treated as undeclared unless
-`AGENT_HUB_MODEL` is set. This matches the existing contract ("keep one stable session ID").
+`AGOPS_MODEL` is set. This matches the existing contract ("keep one stable session ID").
 
 ### 4. Claim enforcement
 
@@ -166,9 +166,9 @@ Heartbeat, checkpoint, block, release, and complete do not re-check tier. Owners
 gates them, and re-checking would break checkpoints after a mid-task model switch. The tier
 that matters is the one recorded at claim time.
 
-Override: `agent-hub task claim … --allow-tier-mismatch`.
+Override: `agops task claim … --allow-tier-mismatch`.
 
-- Refused when `AGENT_HUB_AGENT_SESSION` is set.
+- Refused when `AGOPS_AGENT_SESSION` is set.
 - Refused when stdin is not a TTY.
 - Requires typing the task id, like `plan approve`.
 - Still requires a declared, mapped model; it only bypasses the comparison.
@@ -176,7 +176,7 @@ Override: `agent-hub task claim … --allow-tier-mismatch`.
 - Not available through MCP.
 
 `ready_tasks` stays tier-agnostic: it answers "claimable in principle". `brief` applies the
-per-session filter. `agent-hub task ready --tier NAME` is added for scripting.
+per-session filter. `agops task ready --tier NAME` is added for scripting.
 
 ### 5. Surface changes
 
@@ -197,7 +197,7 @@ MCP: `hub_get_brief` gains `model: str | None = None`. No other signature change
 Managed instruction block (`setup.INSTRUCTIONS`, propagated by `setup` and
 `adapter install`) gains:
 
-> Pass your current model id to `hub_get_brief` (or `agent-hub brief --model`) at session
+> Pass your current model id to `hub_get_brief` (or `agops brief --model`) at session
 > start and again if the model changes; claims are limited to tasks matching your tier.
 
 Docs: `protocol.md` gains an "Execution tiers" section covering the policy file, default,
@@ -205,9 +205,9 @@ resolution order, claim rule, and override. README's everyday workflow shows `--
 
 ### 6. Code placement
 
-- `src/agent_hub/policy.py` (new): load and validate `tiers.yaml`; `tier_for_model`;
+- `src/agops/policy.py` (new): load and validate `tiers.yaml`; `tier_for_model`;
   default file content.
-- `src/agent_hub/sessions.py` (new): session record read/write; `resolve_model`.
+- `src/agops/sessions.py` (new): session record read/write; `resolve_model`.
 - `hub.py`: `brief` declaration and filtering; `claim_task` checks and payload;
   `_default_policy` write in setup path.
 - `state.py`: new `TaskState` fields; `validate_plan` accepts an optional policy for tier
@@ -234,7 +234,7 @@ Declaration:
 Claim:
 - matching tier succeeds and the event carries `model`, `tier`, `tier_override: false`;
 - mismatch rejected with the exact message; undeclared rejected; unknown model rejected;
-- `--allow-tier-mismatch` refused under `AGENT_HUB_AGENT_SESSION` and when stdin is not a TTY;
+- `--allow-tier-mismatch` refused under `AGOPS_AGENT_SESSION` and when stdin is not a TTY;
 - override succeeds interactively and stamps `tier_override: true`;
 - MCP path has no override.
 

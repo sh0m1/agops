@@ -9,9 +9,9 @@ import pytest
 import yaml
 from conftest import project as make_project
 
-from agent_hub.config import config_path
-from agent_hub.hub import Hub
-from agent_hub.notes import (
+from agops.config import config_path
+from agops.hub import Hub
+from agops.notes import (
     AGOPS_BASE,
     LEGACY_AGOPS_BASE,
     PERSONAL_START,
@@ -23,7 +23,7 @@ from agent_hub.notes import (
     plan_workspace,
     project_workspace,
 )
-from agent_hub.state import PlanState, TaskState, load_plan
+from agops.state import PlanState, TaskState, load_plan
 
 
 def _connected(hub: Hub, target: Path) -> NotesBridge:
@@ -410,7 +410,7 @@ def test_hub_returns_notes_warnings_after_a_durable_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from agent_hub import notes
+    from agops import notes
 
     def unavailable(_: NotesBridge) -> None:
         raise OSError("disk")

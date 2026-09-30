@@ -9,6 +9,7 @@ from typing import Any
 
 from .git import is_managed_clone, remote_url, run_git
 from .hub import Hub
+from .migration import pending as legacy_pending
 from .policy import PolicyError
 from .sessions import default_home
 
@@ -17,9 +18,19 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 # Keys in a doctor report that describe state rather than pass/fail checks.
 INFORMATIONAL = frozenset(
-    {"root", "queued_checkpoints", "policy", "remote", "profile", "mcp_pinned", "ok", "notes"}
+    {
+        "root",
+        "queued_checkpoints",
+        "policy",
+        "remote",
+        "profile",
+        "mcp_pinned",
+        "ok",
+        "notes",
+        "legacy_install",
+    }
 )
-_PINNED_ASSIGNMENT = re.compile(r"^\s*AGENT_HUB_REPO\s*=")
+_PINNED_ASSIGNMENT = re.compile(r"^\s*AGOPS_REPO\s*=")
 
 
 def doctor(
@@ -48,6 +59,7 @@ def doctor(
     checks["claude_instructions"] = (home / ".claude" / "CLAUDE.md").exists()
     checks["remote"] = remote_url(hub.root)
     checks["mcp_pinned"] = pinned_mcp_registrations(home, which=which, runner=runner)
+    checks["legacy_install"] = legacy_pending(home, which=which, runner=runner)
     try:
         from .notes import NotesBridge
 
@@ -63,35 +75,35 @@ def doctor(
 def pinned_mcp_registrations(
     home: Path, *, which: Which = shutil.which, runner: Runner = subprocess.run
 ) -> list[str]:
-    """Tools whose agent-hub MCP registration still bakes in AGENT_HUB_REPO (pre-0.6 setups)."""
+    """Tools whose agops MCP registration still bakes in AGOPS_REPO (pre-0.6 setups)."""
     pinned: list[str] = []
     if which("claude"):
         result = runner(
-            ["claude", "mcp", "get", "agent-hub"], check=False, capture_output=True, text=True
+            ["claude", "mcp", "get", "agops"], check=False, capture_output=True, text=True
         )
-        if "AGENT_HUB_REPO=" in (result.stdout or ""):
+        if "AGOPS_REPO=" in (result.stdout or ""):
             pinned.append("claude")
     if which("codex"):
         config = home / ".codex" / "config.toml"
         if config.exists():
-            block = codex_agent_hub_block(config.read_text(encoding="utf-8"))
-            # A pinned value is an assignment `AGENT_HUB_REPO = "..."` in the env sub-table;
+            block = codex_agops_block(config.read_text(encoding="utf-8"))
+            # A pinned value is an assignment `AGOPS_REPO = "..."` in the env sub-table;
             # the name also appears inside the `env_vars` forwarding list, which is fine.
             if any(_PINNED_ASSIGNMENT.match(line) for line in block.splitlines()):
                 pinned.append("codex")
     return pinned
 
 
-def codex_agent_hub_block(text: str) -> str:
-    """The `[mcp_servers.agent-hub]` table and its sub-tables from a Codex config.toml."""
+def codex_agops_block(text: str) -> str:
+    """The `[mcp_servers.agops]` table and its sub-tables from a Codex config.toml."""
     lines = text.splitlines()
     try:
-        start = lines.index("[mcp_servers.agent-hub]")
+        start = lines.index("[mcp_servers.agops]")
     except ValueError:
         return ""
     block = [lines[start]]
     for line in lines[start + 1 :]:
-        if line.startswith("[") and not line.startswith("[mcp_servers.agent-hub"):
+        if line.startswith("[") and not line.startswith("[mcp_servers.agops"):
             break
         block.append(line)
     return "\n".join(block)

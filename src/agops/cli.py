@@ -22,12 +22,12 @@ from .state import load_plan
 
 
 def default_session() -> str:
-    """AGENT_HUB_SESSION when set; otherwise an id stable for the life of this terminal."""
-    return os.environ.get("AGENT_HUB_SESSION") or f"shell-{os.getppid()}"
+    """AGOPS_SESSION when set; otherwise an id stable for the life of this terminal."""
+    return os.environ.get("AGOPS_SESSION") or f"shell-{os.getppid()}"
 
 
 def actor_session(args: argparse.Namespace) -> tuple[str, str]:
-    actor = getattr(args, "actor", None) or os.environ.get("AGENT_HUB_ACTOR", "agent")
+    actor = getattr(args, "actor", None) or os.environ.get("AGOPS_ACTOR", "agent")
     session = getattr(args, "session", None) or default_session()
     return actor, session
 
@@ -41,7 +41,7 @@ def emit(value: Any, as_json: bool = False) -> None:
 
 def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog)
-    parser.add_argument("--repo", help="Agent Hub runtime clone")
+    parser.add_argument("--repo", help="agops runtime clone")
     parser.add_argument("--json", action="store_true")
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -216,7 +216,7 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
 
 def main() -> None:
     command_name = Path(sys.argv[0]).name
-    parser = build_parser(command_name if command_name in {"agops", "agent-hub"} else "agops")
+    parser = build_parser(command_name if command_name == "agops" else "agops")
     args = parser.parse_args()
     try:
         result = dispatch(args)
@@ -283,7 +283,7 @@ def dispatch(args: argparse.Namespace) -> Any:
         return hub.brief(
             Path(args.cwd),
             model=args.model,
-            actor=os.environ.get("AGENT_HUB_ACTOR", "agent"),
+            actor=os.environ.get("AGOPS_ACTOR", "agent"),
             session=default_session(),
         )
     if args.command == "policy":
@@ -313,7 +313,7 @@ def dispatch(args: argparse.Namespace) -> Any:
             actor, session = actor_session(args)
             return hub.draft_plan(Path(args.source), actor, session)
         if args.plan_command == "approve":
-            if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+            if os.environ.get("AGOPS_AGENT_SESSION"):
                 raise ValueError("Plan approval is unavailable inside a managed agent session")
             if not args.yes:
                 if not sys.stdin.isatty():
@@ -323,7 +323,7 @@ def dispatch(args: argparse.Namespace) -> Any:
                     raise ValueError("Approval cancelled")
             return hub.approve_plan(args.plan_id, args.revision)
         if args.plan_command == "cancel":
-            if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+            if os.environ.get("AGOPS_AGENT_SESSION"):
                 raise ValueError("Plan cancellation is unavailable inside an agent session")
             require_human_confirmation(args.plan_id, args.yes, "cancel")
             return hub.cancel_plan(args.plan_id, args.reason)
@@ -344,7 +344,7 @@ def dispatch(args: argparse.Namespace) -> Any:
         actor, session = actor_session(args)
         if args.task_command == "claim":
             if args.allow_tier_mismatch:
-                if os.environ.get("AGENT_HUB_AGENT_SESSION"):
+                if os.environ.get("AGOPS_AGENT_SESSION"):
                     raise ValueError("Tier override is unavailable inside a managed agent session")
                 require_human_confirmation(
                     args.task_id,
@@ -395,7 +395,7 @@ def _remote_line(summary: dict[str, Any]) -> str:
         return summary["remote"]
     if summary.get("remote_removed"):
         return f"local only (detached from {summary['remote_removed']})"
-    return "local only (share it later: agent-hub setup --remote <url>)"
+    return "local only (share it later: agops setup --remote <url>)"
 
 
 def format_setup_summary(summary: dict[str, Any]) -> str:
@@ -408,7 +408,7 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
         failing.append("policy")
     default_marker = " (default)" if summary["profile"] == summary["default_profile"] else ""
     lines = [
-        "Agent Hub setup " + ("complete" if summary["ok"] else "finished with problems"),
+        "agops setup " + ("complete" if summary["ok"] else "finished with problems"),
         f"  profile:  {summary['profile']}{default_marker}",
         f"  runtime:  {summary['runtime']}",
         "  remote:   " + _remote_line(summary),
@@ -421,15 +421,23 @@ def format_setup_summary(summary: dict[str, Any]) -> str:
     skipped = [tool for tool, state in summary["tools"].items() if state != "configured"]
     if skipped:
         lines.append(
-            f"Next: install {', '.join(skipped)} and re-run `agent-hub setup` to register the "
+            f"Next: install {', '.join(skipped)} and re-run `agops setup` to register the "
             "MCP server there."
         )
     pinned = report.get("mcp_pinned") or []
     if pinned:
         lines.append(
             f"Next: the {', '.join(pinned)} MCP registration still pins a hub path; re-run "
-            "`agent-hub setup` after upgrading so AGENT_HUB_PROFILE takes effect."
+            "`agops setup` after upgrading so AGOPS_PROFILE takes effect."
         )
+    migration = summary.get("migration") or {}
+    for moved in migration.get("moved", []):
+        lines.append(f"Migrated: {moved}")
+    for warning in migration.get("warnings", []):
+        lines.append(f"Warning: {warning}")
+    for item in report.get("legacy_install") or []:
+        if item.startswith("conflict:"):
+            lines.append(f"Warning: {item[len('conflict: '):]}")
     return "\n".join(lines) + "\n"
 
 
@@ -464,16 +472,16 @@ def profile_report(as_json: bool) -> Any:
         return data
     lines: list[str] = []
     if not entries:
-        lines.append("No hub profiles configured; run `agent-hub setup [--profile NAME]`.")
+        lines.append("No hub profiles configured; run `agops setup [--profile NAME]`.")
     for entry in entries:
         markers = ("* " if entry["default"] else "  ") + ("← " if entry["current"] else "  ")
         where = entry["remote"] or "local only"
         lines.append(f"{markers}{entry['name']:<12} {where:<44} {entry['repo']}")
     if resolution and resolution.source == "explicit":
-        lines.append(f"Current hub: explicit path {resolution.root} (AGENT_HUB_REPO or --repo)")
+        lines.append(f"Current hub: explicit path {resolution.root} (AGOPS_REPO or --repo)")
         if resolution.overridden_profile:
             lines.append(
-                f"Warning: this overrides AGENT_HUB_PROFILE={resolution.overridden_profile}"
+                f"Warning: this overrides AGOPS_PROFILE={resolution.overridden_profile}"
             )
     elif resolution:
         lines.append(f"Current hub: {resolution.profile} (via {resolution.source})")
@@ -560,7 +568,7 @@ def run_agent(
     policy = hub.policy()
     if not resolved and policy and plan_id and task_id:
         raise ValueError(
-            "agent-hub run needs --model <id> (or AGENT_HUB_MODEL) to claim a tiered task"
+            "agops run needs --model <id> (or AGOPS_MODEL) to claim a tiered task"
         )
     hub.sync()
     session = str(uuid.uuid4())
@@ -572,14 +580,14 @@ def run_agent(
     environment = os.environ.copy()
     environment.update(
         {
-            "AGENT_HUB_REPO": str(hub.root),
-            "AGENT_HUB_ACTOR": actor,
-            "AGENT_HUB_SESSION": session,
-            "AGENT_HUB_AGENT_SESSION": "1",
+            "AGOPS_REPO": str(hub.root),
+            "AGOPS_ACTOR": actor,
+            "AGOPS_SESSION": session,
+            "AGOPS_AGENT_SESSION": "1",
         }
     )
     if resolved:
-        environment["AGENT_HUB_MODEL"] = resolved
+        environment["AGOPS_MODEL"] = resolved
     stopped = threading.Event()
 
     def heartbeat() -> None:

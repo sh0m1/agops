@@ -666,12 +666,12 @@ class Hub:
             record_session(session, actor, resolved_model, session_tier)
         filtering = policy is not None and session_tier not in {None, UNKNOWN_TIER}
 
-        lines = ["# Agent Hub brief", "", f"Project: {project_id or 'unregistered'}"]
+        lines = ["# agops brief", "", f"Project: {project_id or 'unregistered'}"]
         if self.profile:
             lines.append(f"Hub: {self.profile} · {remote_url(self.root) or 'local only'}")
         if self.overridden_profile:
             lines.append(
-                f"Warning: AGENT_HUB_REPO overrides AGENT_HUB_PROFILE={self.overridden_profile}; "
+                f"Warning: AGOPS_REPO overrides AGOPS_PROFILE={self.overridden_profile}; "
                 f"this session writes to {self.root}"
             )
         if remote:

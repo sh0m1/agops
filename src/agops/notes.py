@@ -303,6 +303,88 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else ([] if value is None else [value])
 
 
+def _inline(value: Any) -> str:
+    if isinstance(value, dict):
+        return ", ".join(f"{key}: {_inline(item)}" for key, item in value.items())
+    if isinstance(value, list):
+        return ", ".join(_inline(item) for item in value)
+    return str(value)
+
+
+def _code_items(value: Any) -> str:
+    return ", ".join(f"`{item}`" for item in _as_list(value))
+
+
+def _quoted(text: str) -> list[str]:
+    return [f"> {line}".rstrip() if line else ">" for line in text.strip("\n").split("\n")]
+
+
+def _plan_details(plan: dict[str, Any], state: PlanState) -> list[str]:
+    """The full definition in readable form: the YAML sits in a folder Obsidian hides."""
+
+    def labelled(label: str, value: Any) -> str:
+        text = str(value).strip()
+        return f"- **{label}:**{chr(10) if chr(10) in text else ' '}{text}"
+
+    lines = ["", "## Plan details", ""]
+    scope = plan.get("scope")
+    if isinstance(scope, dict) and scope:
+        lines.append("**Scope:**")
+        lines.extend(labelled(key, _inline(value)) for key, value in scope.items())
+        lines.append("")
+    policy = plan.get("execution_policy")
+    if isinstance(policy, dict) and policy:
+        lines.append("**Execution policy:**")
+        lines.extend(labelled(key, _inline(value)) for key, value in policy.items())
+        lines.append("")
+    references = [
+        (key, plan[key])
+        for key in ("design_document", "review_document", "reviewed_heads", "milestones")
+        if plan.get(key)
+    ]
+    if references:
+        lines.append("**References:**")
+        for key, value in references:
+            if isinstance(value, dict):
+                lines.append(f"- **{key}:**")
+                lines.extend(f"  - **{name}:** {_inline(item)}" for name, item in value.items())
+            elif isinstance(value, list):
+                lines.append(f"- **{key}:**")
+                lines.extend(f"  - {_inline(item)}" for item in value)
+            else:
+                lines.append(f"- **{key}:** {value}")
+        lines.append("")
+    revision = [f"revision {plan['revision']}"]
+    for key in ("created_at", "created_by"):
+        if plan.get(key):
+            revision.append(f"{key} {plan[key]}")
+    lines.extend([f"**Revision:** {' · '.join(revision)}", "", "### Tasks"])
+    for task in plan.get("tasks", []):
+        current = state.tasks.get(task["id"])
+        status = current.status if current else None
+        kind = {"completed": "done", "blocked": "failure"}.get(status or "", "todo")
+        lines.extend(["", f"> [!{kind}]- `{task['id']}` {task['title']}"])
+        facts = [("status", status or "pending"), ("project", task.get("project"))]
+        for key in ("tier", "model", "reasoning_effort"):
+            facts.append((key, task.get(key)))
+        for label, value in facts:
+            if value:
+                lines.append(f"> - {label}: {value}")
+        for key in ("depends_on", "covers"):
+            if task.get(key):
+                lines.append(f"> - {key}: {_code_items(task[key])}")
+        if task.get("read_only"):
+            lines.append("> - read_only: yes")
+        if task.get("write_scope"):
+            lines.append(f"> - write_scope: {_code_items(task['write_scope'])}")
+        for key in ("acceptance", "instructions"):
+            value = task.get(key)
+            if value:
+                text = "\n".join(str(v) for v in value) if isinstance(value, list) else str(value)
+                lines.extend([">", f"> **{key.capitalize()}:**", *_quoted(text)])
+    return lines
+
+
 def _definition_yaml(plan: dict[str, Any]) -> str:
     return yaml.safe_dump(_definition(plan), sort_keys=False, allow_unicode=True)
 
@@ -851,6 +933,7 @@ class NotesBridge:
                 else:
                     lines.append(f"- {criterion}")
 
+        lines.extend(_plan_details(plan, state))
         lines.extend(["", "## My notes", "", PERSONAL_START])
         if personal:
             lines.append(personal)

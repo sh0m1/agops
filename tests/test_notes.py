@@ -80,7 +80,7 @@ def test_connect_renders_portable_hybrid_notes(
     assert "- [ ] `first` First task — draft" in text
     assert "- Revision 1 is waiting for approval" in text
     assert "`plans/.definitions/shared-plan.yaml`" in text
-    assert "write_scope" not in text
+    assert "> - write_scope: `src/first/**`" in text
     definition = yaml.safe_load(_definition_file(tmp_path).read_text(encoding="utf-8"))
     assert definition["id"] == "shared-plan" and len(definition["tasks"]) == 2
     assert "revision" not in definition
@@ -92,6 +92,63 @@ def test_connect_renders_portable_hybrid_notes(
     assert bridge.status()["plans"] == [
         {"id": "shared-plan", "status": "clean", "plan_status": "draft"}
     ]
+
+
+def _details_note(local_hub: Path, tmp_path: Path, extra: str, instructions: str) -> str:
+    plan = tmp_path / "details.yaml"
+    plan.write_text(
+        "id: detail-plan\ntitle: Detail plan\ngoal: G\n"
+        "scope:\n  projects: [acme-widgets]\n"
+        "execution_policy:\n  authority: Full text of authority.\n  coordination: Talk often.\n"
+        "design_document: docs/design.md\nmilestones:\n  m1: Ship it\n"
+        "acceptance_criteria:\n  - id: ok\n    text: Works.\n"
+        "tasks:\n  - id: only\n    title: Only task\n    project: acme-widgets\n"
+        f"    depends_on: []\n    write_scope: [src/a/**]\n    acceptance: [Tests pass]\n"
+        f"    covers: []\n{extra}    instructions: |\n{instructions}",
+        encoding="utf-8",
+    )
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan, "codex", "one")
+    _connected(hub, tmp_path / "vault")
+    note = tmp_path / "vault" / "plans" / "active" / "detail-plan.md"
+    return note.read_text(encoding="utf-8")
+
+
+def test_plan_details_section_sits_between_acceptance_and_notes(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    text = _details_note(local_hub, tmp_path, "    tier: high\n", "      Do it.\n")
+    assert text.index("## Acceptance") < text.index("## Plan details") < text.index("## My notes")
+    assert "- **authority:** Full text of authority." in text
+    assert "- **projects:** acme-widgets" in text
+    assert "- **design_document:** docs/design.md" in text
+    assert "  - **m1:** Ship it" in text
+    assert "**Revision:** revision 1 · created_at " in text
+    assert "> [!todo]- `only` Only task" in text
+    assert "> - tier: high" in text and "> - write_scope: `src/a/**`" in text
+    assert "> - status: pending" in text
+
+
+def test_plan_details_do_not_truncate_and_keep_multiline_inside_callout(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    long_line = "word " * 200
+    body = f"      {long_line}\n\n      second paragraph\n"
+    text = _details_note(local_hub, tmp_path, "", body)
+    assert long_line.strip() in text
+    section = text.split("### Tasks", 1)[1].split("## My notes", 1)[0]
+    assert "\n>\n> second paragraph" in section
+    callout = [ln for ln in section.strip().splitlines() if ln]
+    assert all(ln.startswith(">") for ln in callout)
+
+
+def test_plan_details_omit_absent_optional_fields(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    text = _details_note(local_hub, tmp_path, "", "      Do it.\n")
+    for absent in ("read_only", "reasoning_effort", "> - model", "> - tier",
+                   "review_document", "reviewed_heads", "depends_on", "covers"):
+        assert absent not in text
 
 
 def test_sync_imports_a_note_edit_as_unapproved_revision_and_preserves_personal(
@@ -351,7 +408,9 @@ def test_pending_definition_displays_only_approved_execution_tasks(
 
     text = (tmp_path / "vault" / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
     assert "Revision 2 is waiting for approval" in text
-    assert "## Open (2)" in text and "`unapproved`" not in text
+    summary, details = text.split("## Plan details")
+    assert "## Open (2)" in summary and "`unapproved`" not in summary
+    assert "`unapproved`" in details
     assert "unapproved" in _definition_file(tmp_path).read_text(encoding="utf-8")
     assert bridge.status()["plans"][0]["status"] == "clean"
 

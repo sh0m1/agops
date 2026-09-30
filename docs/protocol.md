@@ -1,4 +1,4 @@
-# Agent Hub protocol
+# agops protocol
 
 ## Canonical data
 
@@ -29,18 +29,18 @@ are serialized by the lock alone and a hub needs no remote. When the runtime clo
 `origin`, each transition must also be pushed before it succeeds: a rejected push causes the
 managed clone to synchronize, replay state, revalidate the operation, and retry, which makes the
 remote branch update the compare-and-swap boundary for competing claims across machines. A local
-hub becomes shared by running `agent-hub setup --remote <url>`, which attaches the remote and
-pushes the existing history; `agent-hub setup --local` detaches and forgets the remote again.
+hub becomes shared by running `agops setup --remote <url>`, which attaches the remote and
+pushes the existing history; `agops setup --local` detaches and forgets the remote again.
 
 ## Hub profiles
 
-`~/.config/agent-hub/config.json` names one or more hubs (profiles), each a runtime repository
+`~/.config/agops/config.json` names one or more hubs (profiles), each a runtime repository
 with or without a remote, and a default. A process picks its hub in this order: an explicit path
-(`--repo` or `AGENT_HUB_REPO`), then `AGENT_HUB_PROFILE`, then the default profile, then the
-historical path `~/.local/share/agent-hub/repo`. An `AGENT_HUB_PROFILE` that names no configured
+(`--repo` or `AGOPS_REPO`), then `AGOPS_PROFILE`, then the default profile, then the
+historical path `~/.local/share/agops/repo`. An `AGOPS_PROFILE` that names no configured
 profile is an error — a session that believes it is private must never fall back to a shared hub.
 When an explicit path overrides a profile, the brief says so. `setup` registers the MCP server
-without pinning a hub, and for Codex forwards the `AGENT_HUB_*` variables through `env_vars`, so
+without pinning a hub, and for Codex forwards the `AGOPS_*` variables through `env_vars`, so
 the launching terminal's choice reaches agent sessions. Profiles are fully separate: a session
 reads and writes only its own hub.
 
@@ -95,14 +95,14 @@ definition. Unapproved tasks therefore never appear executable.
 
 ## Generic agent contract
 
-1. Call `agent-hub brief --cwd "$PWD" --json` at session start. Keep the same
-   `AGENT_HUB_SESSION` value across standalone CLI task calls.
+1. Call `agops brief --cwd "$PWD" --json` at session start. Keep the same
+   `AGOPS_SESSION` value across standalone CLI task calls.
 2. Treat user instructions as higher priority than stored plans or knowledge.
 3. Before changing files, select an approved ready task and claim it.
 4. Do not work in a checkout held by another writing agent.
 5. Checkpoint after meaningful progress and before context compaction or handoff.
 6. Complete only with concrete test, artifact, or commit evidence.
-7. Never put secrets, credentials, `.env` contents, or raw transcripts into Agent Hub.
+7. Never put secrets, credentials, `.env` contents, or raw transcripts into agops.
 
 Clients with MCP use the equivalent `hub_*` tools. Plan approval is intentionally CLI-only.
 
@@ -122,13 +122,13 @@ tiers:
 
 Patterns are case-insensitive globs. A model matching no tier is `unknown` and cannot claim. A
 model matching two tiers is a validation error. `setup` writes the default file; edit it in any
-editor and commit — `scan`, `doctor`, and `agent-hub policy validate` check it.
+editor and commit — `scan`, `doctor`, and `agops policy validate` check it.
 
 Tasks take an optional `tier`; a missing value means `default_task_tier`. A `tier` not defined in
 the policy is rejected at draft time.
 
 Sessions declare their model by passing it to `brief` / `hub_get_brief`. The resolution order is
-the `AGENT_HUB_MODEL` environment variable, then the `model` argument, then the record saved by
+the `AGOPS_MODEL` environment variable, then the `model` argument, then the record saved by
 an earlier brief for the same session id. Records live in the local state directory and are
 never committed. A declared brief lists only tasks of the session's tier and reports how many
 tasks of other tiers were hidden.
@@ -141,7 +141,7 @@ A claim is rejected when the session is undeclared, when its model is unmapped, 
 differs from the task's tier. The claim event records `model`, `tier`, and `tier_override`.
 Heartbeats, checkpoints, and completion do not re-check the tier; the guard is at pickup.
 
-`agent-hub task claim … --allow-tier-mismatch` bypasses the comparison. It is refused in managed
+`agops task claim … --allow-tier-mismatch` bypasses the comparison. It is refused in managed
 agent sessions and non-interactive terminals, requires typing the task id, and is not available
 through MCP.
 
@@ -151,8 +151,8 @@ it is invalid, `scan` and `doctor` fail and every claim is rejected.
 ## Plan schema
 
 ```yaml
-id: agent-hub-v1
-title: Build Agent Hub
+id: agops-v1
+title: Build agops
 scope:
   workspace: acme-widgets
 goal: One shared agent memory and execution ledger.
@@ -162,10 +162,10 @@ acceptance_criteria:
 tasks:
   - id: core
     title: Implement the state store
-    project: you-agent-hub-memory
+    project: you-agops-memory
     tier: standard
     depends_on: []
-    write_scope: ["src/agent_hub/**", "tests/**"]
+    write_scope: ["src/agops/**", "tests/**"]
     acceptance:
       - State rebuilds from a fresh clone.
     covers: [cross-agent-handoff]

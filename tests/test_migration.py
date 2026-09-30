@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_hub.cli import migrate_remember
-from agent_hub.hub import Hub
+from agops.cli import migrate_remember
+from agops.hub import Hub
 
 
 def test_remember_migration_is_archived_and_omits_empty_now(hub_repo: Path, tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.config import (
+from agops.config import (
     Profiles,
     config_path,
     load_profiles,
@@ -23,13 +23,13 @@ def _write_legacy(home: Path, repo: str, remote: str | None) -> Path:
 
 
 def test_no_config_resolves_to_legacy_default(fake_home: Path, monkeypatch) -> None:
-    monkeypatch.delenv("AGENT_HUB_PROFILE", raising=False)
-    monkeypatch.delenv("AGENT_HUB_REPO", raising=False)
+    monkeypatch.delenv("AGOPS_PROFILE", raising=False)
+    monkeypatch.delenv("AGOPS_REPO", raising=False)
     assert load_profiles(fake_home) == Profiles(default=None, profiles={})
     resolution = resolve_repo(None, home=fake_home)
     assert resolution.profile == "default"
     assert resolution.source == "legacy"
-    assert resolution.root == fake_home / ".local" / "share" / "agent-hub" / "repo"
+    assert resolution.root == fake_home / ".local" / "share" / "agops" / "repo"
     assert resolution.overridden_profile is None
     assert not config_path(fake_home).exists()
 
@@ -37,8 +37,8 @@ def test_no_config_resolves_to_legacy_default(fake_home: Path, monkeypatch) -> N
 def test_legacy_config_is_read_as_default_profile_without_rewrite(
     fake_home: Path, monkeypatch
 ) -> None:
-    monkeypatch.delenv("AGENT_HUB_PROFILE", raising=False)
-    monkeypatch.delenv("AGENT_HUB_REPO", raising=False)
+    monkeypatch.delenv("AGOPS_PROFILE", raising=False)
+    monkeypatch.delenv("AGOPS_REPO", raising=False)
     path = _write_legacy(fake_home, "/somewhere/repo", "git@example.invalid:m.git")
     before = path.read_bytes()
     profiles = load_profiles(fake_home)
@@ -53,7 +53,7 @@ def test_legacy_config_is_read_as_default_profile_without_rewrite(
 
 
 def test_profile_runtime_paths(fake_home: Path) -> None:
-    base = fake_home / ".local" / "share" / "agent-hub"
+    base = fake_home / ".local" / "share" / "agops"
     assert profile_runtime("default", fake_home) == base / "repo"
     assert profile_runtime("team", fake_home) == base / "team"
     with pytest.raises(ValueError, match="profile name"):
@@ -76,8 +76,8 @@ def test_save_and_reload_v3(fake_home: Path) -> None:
 
 @pytest.fixture
 def two_profiles(fake_home: Path, monkeypatch) -> Profiles:
-    monkeypatch.delenv("AGENT_HUB_PROFILE", raising=False)
-    monkeypatch.delenv("AGENT_HUB_REPO", raising=False)
+    monkeypatch.delenv("AGOPS_PROFILE", raising=False)
+    monkeypatch.delenv("AGOPS_REPO", raising=False)
     profiles = Profiles(
         default="team",
         profiles={
@@ -93,7 +93,7 @@ def test_resolution_order(fake_home: Path, two_profiles: Profiles, monkeypatch) 
     assert resolve_repo(None, home=fake_home).profile == "team"
     assert resolve_repo(None, home=fake_home).source == "default"
 
-    monkeypatch.setenv("AGENT_HUB_PROFILE", "private")
+    monkeypatch.setenv("AGOPS_PROFILE", "private")
     private = resolve_repo(None, home=fake_home)
     assert (private.profile, private.source, private.root) == (
         "private",
@@ -101,7 +101,7 @@ def test_resolution_order(fake_home: Path, two_profiles: Profiles, monkeypatch) 
         Path("/r/private"),
     )
 
-    monkeypatch.setenv("AGENT_HUB_REPO", "/r/team")
+    monkeypatch.setenv("AGOPS_REPO", "/r/team")
     explicit = resolve_repo(None, home=fake_home)
     assert (explicit.profile, explicit.source) == ("explicit", "explicit")
     assert explicit.root == Path("/r/team")
@@ -112,6 +112,6 @@ def test_resolution_order(fake_home: Path, two_profiles: Profiles, monkeypatch) 
 
 
 def test_unknown_profile_fails_closed(fake_home: Path, two_profiles: Profiles, monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_HUB_PROFILE", "nope")
+    monkeypatch.setenv("AGOPS_PROFILE", "nope")
     with pytest.raises(ValueError, match=r"Unknown hub profile 'nope'; configured: private, team"):
         resolve_repo(None, home=fake_home)

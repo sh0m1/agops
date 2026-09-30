@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from conftest import git, which_for
 
-from agent_hub.health import doctor
-from agent_hub.hub import Hub
-from agent_hub.setup import (
+from agops.health import doctor
+from agops.hub import Hub
+from agops.setup import (
     INSTRUCTIONS,
     config_path,
     install_skills,
@@ -61,11 +61,11 @@ def test_setup_remembers_remote_on_second_run(
 ) -> None:
     _, runner = recording_runner
     runtime = tmp_path / "rt"
-    first = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    first = _setup(bare_remote, runtime, fake_home, which_for("agops-mcp"), runner)
     assert first["remote"] == bare_remote
     config = config_path(fake_home)
     saved = config.read_text(encoding="utf-8")
-    second = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    second = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     assert second["remote"] == bare_remote
     assert config.read_text(encoding="utf-8") == saved
     data = json.loads(saved)
@@ -76,11 +76,11 @@ def test_setup_remembers_remote_on_second_run(
 def test_setup_without_remote_creates_a_local_hub(
     tmp_path: Path, fake_home: Path, recording_runner, monkeypatch
 ) -> None:
-    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
-    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("AGOPS_TESTING", "1")
+    monkeypatch.setenv("AGOPS_LOCK_DIR", str(tmp_path / "locks"))
     _, runner = recording_runner
     runtime = tmp_path / "rt"
-    summary = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    summary = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     assert summary["remote"] is None
     assert summary["ok"] is True
     assert summary["policy"] == "created"
@@ -89,7 +89,7 @@ def test_setup_without_remote_creates_a_local_hub(
     assert (runtime / "memory" / "policy" / "tiers.yaml").exists()
     assert git(runtime, "status", "--porcelain", "--untracked-files=no") == ""
     assert _configured_remote(fake_home) is None
-    again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    again = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     assert again["remote"] is None and again["policy"] == "already-present"
 
 
@@ -98,10 +98,10 @@ def test_setup_local_detaches_remote_and_forgets_it(
 ) -> None:
     _, runner = recording_runner
     runtime = tmp_path / "rt"
-    _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    _setup(bare_remote, runtime, fake_home, which_for("agops-mcp"), runner)
     assert git(runtime, "remote", "get-url", "origin") == bare_remote
 
-    summary = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner, local=True)
+    summary = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner, local=True)
     assert summary["remote"] is None
     assert summary["remote_removed"] == bare_remote
     assert summary["doctor"]["remote"] is None
@@ -109,12 +109,12 @@ def test_setup_local_detaches_remote_and_forgets_it(
     assert _configured_remote(fake_home) is None
 
     # A plain re-run must stay local: the old remote is forgotten, not merely detached.
-    again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    again = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     assert again["remote"] is None and again["remote_removed"] is None
     assert git(runtime, "remote") == ""
 
     # --local on an already-local hub is a no-op.
-    once_more = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner, local=True)
+    once_more = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner, local=True)
     assert once_more["remote_removed"] is None and once_more["ok"] is True
 
 
@@ -136,16 +136,16 @@ def test_setup_local_and_remote_are_mutually_exclusive(
 def test_setup_attaches_a_remote_to_an_existing_local_hub(
     tmp_path: Path, fake_home: Path, recording_runner, monkeypatch
 ) -> None:
-    monkeypatch.setenv("AGENT_HUB_TESTING", "1")
-    monkeypatch.setenv("AGENT_HUB_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("AGOPS_TESTING", "1")
+    monkeypatch.setenv("AGOPS_LOCK_DIR", str(tmp_path / "locks"))
     _, runner = recording_runner
     runtime = tmp_path / "rt"
-    _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     bare = tmp_path / "later.git"
     subprocess.run(
         ["git", "init", "--bare", "-b", "main", str(bare)], check=True, capture_output=True
     )
-    summary = _setup(str(bare), runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    summary = _setup(str(bare), runtime, fake_home, which_for("agops-mcp"), runner)
     assert summary["remote"] == str(bare)
     assert summary["doctor"]["remote"] == str(bare)
     assert git(runtime, "remote", "get-url", "origin") == str(bare)
@@ -159,7 +159,7 @@ def test_setup_requires_mcp_executable_with_path_hint(
     bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
 ) -> None:
     _, runner = recording_runner
-    with pytest.raises(RuntimeError, match="agent-hub-mcp.*PATH"):
+    with pytest.raises(RuntimeError, match="agops-mcp.*PATH"):
         _setup(bare_remote, tmp_path / "rt", fake_home, which_for(), runner)
 
 
@@ -167,7 +167,7 @@ def test_setup_skips_tools_not_on_path(
     bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
 ) -> None:
     calls, runner = recording_runner
-    summary = _setup(bare_remote, tmp_path / "rt", fake_home, which_for("agent-hub-mcp"), runner)
+    summary = _setup(bare_remote, tmp_path / "rt", fake_home, which_for("agops-mcp"), runner)
     assert summary["tools"] == {
         "codex": "skipped-not-installed",
         "claude": "skipped-not-installed",
@@ -179,7 +179,7 @@ def test_setup_configures_tools_without_duplicating_entries(
     bare_remote: str, tmp_path: Path, fake_home: Path, recording_runner
 ) -> None:
     calls, runner = recording_runner
-    which = which_for("agent-hub-mcp", "claude", "codex")
+    which = which_for("agops-mcp", "claude", "codex")
     runtime = tmp_path / "rt"
     summary = _setup(bare_remote, runtime, fake_home, which, runner)
     assert summary["tools"] == {"codex": "configured", "claude": "configured"}
@@ -192,8 +192,8 @@ def test_setup_configures_tools_without_duplicating_entries(
             [tool, "mcp", "add"],
         ]
         add = mcp_calls[1]
-        assert not any(arg.startswith("AGENT_HUB_REPO=") for arg in add)
-        assert add[-1] == "/fake/bin/agent-hub-mcp"
+        assert not any(arg.startswith("AGOPS_REPO=") for arg in add)
+        assert add[-1] == "/fake/bin/agops-mcp"
     first_count = len(calls)
     _setup(None, runtime, fake_home, which, runner)
     assert len(calls) == first_count * 2
@@ -204,7 +204,7 @@ def test_setup_summary_matches_doctor_and_scan(
 ) -> None:
     _, runner = recording_runner
     runtime = tmp_path / "rt"
-    summary = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    summary = _setup(bare_remote, runtime, fake_home, which_for("agops-mcp"), runner)
     assert set(summary) == {
         "ok",
         "runtime",
@@ -220,6 +220,7 @@ def test_setup_summary_matches_doctor_and_scan(
         "profile",
         "default_profile",
         "skills",
+        "migration",
     }
     assert summary["profile"] == "default" and summary["default_profile"] == "default"
     assert summary["remote_removed"] is None
@@ -230,7 +231,7 @@ def test_setup_summary_matches_doctor_and_scan(
     assert summary["doctor"] == expected
     assert summary["doctor"]["mcp_pinned"] == []
     assert summary["doctor"]["codex_instructions"] is True
-    again = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    again = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     assert again["policy"] == "already-present"
     assert again["instructions"] == {"codex_agents_md": "unchanged", "claude_md": "unchanged"}
 
@@ -243,14 +244,14 @@ def test_setup_managed_blocks_are_idempotent_and_backed_up_once(
     agents.parent.mkdir(parents=True)
     agents.write_text("# Mine\n", encoding="utf-8")
     runtime = tmp_path / "rt"
-    first = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    first = _setup(bare_remote, runtime, fake_home, which_for("agops-mcp"), runner)
     assert first["instructions"] == {"codex_agents_md": "updated", "claude_md": "updated"}
     after_first = {
         path.name: path.read_bytes() for path in (agents, fake_home / ".claude" / "CLAUDE.md")
     }
     backups = sorted(agents.parent.glob("AGENTS.md.bak.*"))
     assert len(backups) == 1
-    _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     for path in (agents, fake_home / ".claude" / "CLAUDE.md"):
         assert path.read_bytes() == after_first[path.name]
     assert sorted(agents.parent.glob("AGENTS.md.bak.*")) == backups
@@ -265,12 +266,12 @@ def test_setup_claude_memory_toggle(
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"autoMemoryEnabled": True, "theme": "dark"}), encoding="utf-8")
     runtime = tmp_path / "rt"
-    first = _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    first = _setup(bare_remote, runtime, fake_home, which_for("agops-mcp"), runner)
     assert first["claude_memory_disabled"] is True
     written = json.loads(settings.read_text(encoding="utf-8"))
     assert written == {"autoMemoryEnabled": False, "theme": "dark"}
     assert len(list(settings.parent.glob("settings.json.bak.*"))) == 1
-    second = _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    second = _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     assert second["claude_memory_disabled"] is False
     assert len(list(settings.parent.glob("settings.json.bak.*"))) == 1
 
@@ -282,7 +283,7 @@ def test_setup_claude_memory_toggle(
         bare_remote,
         tmp_path / "rt2",
         other_home,
-        which_for("agent-hub-mcp"),
+        which_for("agops-mcp"),
         runner,
         disable_claude_memory=False,
     )
@@ -344,13 +345,13 @@ def test_setup_rerun_keeps_an_existing_profiles_notes_target(
 ) -> None:
     _, runner = recording_runner
     runtime = tmp_path / "rt"
-    _setup(bare_remote, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    _setup(bare_remote, runtime, fake_home, which_for("agops-mcp"), runner)
     config = config_path(fake_home)
     data = json.loads(config.read_text(encoding="utf-8"))
     vault = str(tmp_path / "vault")
     data["profiles"]["default"]["notes_target"] = vault
     config.write_text(json.dumps(data), encoding="utf-8")
 
-    _setup(None, runtime, fake_home, which_for("agent-hub-mcp"), runner)
+    _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     again = json.loads(config.read_text(encoding="utf-8"))
     assert again["profiles"]["default"]["notes_target"] == vault

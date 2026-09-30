@@ -27,9 +27,9 @@ def run_git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedP
 
 @contextmanager
 def repository_lock(root: Path) -> Iterator[None]:
-    lock_root = Path(os.environ.get("AGENT_HUB_LOCK_DIR", root.parent))
+    lock_root = Path(os.environ.get("AGOPS_LOCK_DIR", root.parent))
     lock_root.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_root / ".agent-hub.lock"
+    lock_path = lock_root / ".agops.lock"
     with lock_path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
@@ -39,7 +39,7 @@ def repository_lock(root: Path) -> Iterator[None]:
 
 
 def is_managed_clone(root: Path) -> bool:
-    return (root / ".agent-hub-managed").exists() or os.environ.get("AGENT_HUB_TESTING") == "1"
+    return (root / ".agops-managed").exists() or os.environ.get("AGOPS_TESTING") == "1"
 
 
 def remote_url(root: Path) -> str | None:
@@ -56,7 +56,7 @@ def has_remote(root: Path) -> bool:
 def assert_clean(root: Path) -> None:
     status = run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip()
     if status:
-        raise GitError("Agent Hub runtime clone has tracked changes; run agent-hub doctor")
+        raise GitError("agops runtime clone has tracked changes; run agops doctor")
 
 
 def sync_from_remote(root: Path) -> None:

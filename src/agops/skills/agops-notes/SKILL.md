@@ -8,7 +8,7 @@ metadata:
 # agops notes: overview and triage
 
 The notes folder is a mirror of the agops hub. The hub is the truth; the mirror is a view.
-Change hub state only with the `agops` CLI or the agent-hub MCP tools, never by editing
+Change hub state only with the `agops` CLI or the agops MCP tools, never by editing
 mirrored files. Keep one stable `--session` for every command in a run (`agops session`).
 
 ## Map of the folder

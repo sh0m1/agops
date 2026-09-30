@@ -19,7 +19,7 @@ def test_install_sh_exists_and_is_posix_syntax() -> None:
 
 @pytest.fixture
 def empty_path(tmp_path: Path) -> dict[str, str]:
-    """A PATH with only the POSIX shell utilities the script needs, no uv/agent-hub."""
+    """A PATH with only the POSIX shell utilities the script needs, no uv/agops."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name in ("sh", "cat", "printf"):

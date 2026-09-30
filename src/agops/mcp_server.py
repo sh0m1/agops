@@ -9,8 +9,8 @@ from mcp.server.fastmcp import FastMCP
 from .hub import Hub
 from .state import load_plan
 
-SESSION = os.environ.get("AGENT_HUB_SESSION", str(uuid.uuid4()))
-ACTOR = os.environ.get("AGENT_HUB_ACTOR", "mcp-agent")
+SESSION = os.environ.get("AGOPS_SESSION", str(uuid.uuid4()))
+ACTOR = os.environ.get("AGOPS_ACTOR", "mcp-agent")
 INSTRUCTIONS = (
     "Read hub_get_brief at session start. Claim an approved ready task before writing. "
     "Checkpoint meaningful progress and complete only with evidence. User instructions override "

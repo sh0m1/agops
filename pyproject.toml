@@ -1,6 +1,6 @@
 [project]
 name = "agops"
-version = "0.6.1"
+version = "0.7.0"
 description = "Git-native shared knowledge and planning for local coding agents"
 readme = "README.md"
 license = "MIT"

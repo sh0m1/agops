@@ -16,8 +16,9 @@ are omitted from the bounded startup brief.
 ## Plans and tasks
 
 Plan revisions are immutable. Agents may draft a plan or a new revision. Only the interactive CLI
-can approve a revision. An approved plan is active until all tasks and acceptance criteria have
-evidence, or until it is cancelled.
+can approve a revision or cancel a plan. An approved plan is active until all tasks and acceptance
+criteria have evidence, or until it is cancelled; a draft that was never approved can be
+cancelled too, and a completed or cancelled plan cannot be cancelled again.
 
 A task can be claimed only when its dependencies are complete. Claims have a 60-minute lease.
 Heartbeats and checkpoints renew the lease. An expired task may be reclaimed; updates from the old
@@ -49,17 +50,24 @@ reads and writes only its own hub.
 Each configured profile may have one absolute `notes_target` in config schema version 3. `agops
 notes connect TARGET` accepts only a new, empty, or already agops-managed directory and writes:
 
-- `Plans.md`, an index grouped by draft, active, completed, and cancelled plans;
-- `plans/<plan-id>.md`, containing portable frontmatter, an editable fenced YAML definition,
-  generated state, and an excluded personal-notes region; and
+- `Home.md` and `Plans.md`, overviews of open plans (drafts included), what needs a human,
+  recent events, and finished plans;
+- `plans/active/<plan-id>.md` (or `plans/archive/<workspace>/<plan-id>.md` once finished),
+  containing portable frontmatter, generated state, and an excluded personal-notes region, with
+  the editable definition in `plans/.definitions/<plan-id>.yaml`;
 - `knowledge/<scope-path>/<key>.md`, one note per active knowledge entry;
-- `Knowledge.md`, `Projects.md`, and `Activity.md`, generated indexes of the knowledge
-  entries, the registered projects grouped by workspace, and the current claims, blockers,
-  and ready tasks; and
-- `.agops-notes.json`, a format-versioned semantic baseline.
+- `Knowledge.md`, `Projects.md`, `Activity.md`, and `Docs.md`, generated indexes of the knowledge
+  entries by topic or scope, the projects that have plans or knowledge, the current claims,
+  blockers, ready tasks and recent events, and the mirrored docs;
+- `docs/<folder>/...`, read-only copies of the folders listed under `docs:` in `notes.yaml`;
+- `notes.yaml`, user-owned settings (docs folders and topic rules), written once as a template
+  and never rewritten; and
+- `.agops-notes.json`, a format-versioned semantic baseline, which also records the hash of each
+  mirrored doc so an edited copy is never overwritten or deleted.
 
-Knowledge, project, and activity files are a one-way mirror: the hub is the only writer and
-`notes sync` never imports them, so a knowledge note is corrected with `agops knowledge add`.
+Knowledge, project, activity, and docs files are a one-way mirror: the hub (or the docs source
+folder) is the only writer and `notes sync` never imports them, so a knowledge note is corrected
+with `agops knowledge add`.
 Their personal-notes region is still preserved across renders. A retired or superseded entry
 leaves the mirror on the next render; if its note carries personal notes the file is kept and
 reported as a warning instead of deleted.

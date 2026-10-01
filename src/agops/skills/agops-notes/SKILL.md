@@ -13,17 +13,24 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
 
 ## Map of the folder
 
-- `Home.md` — start here: tally, what needs the user, active plans by last activity, views.
-- `agops.base` — Obsidian Bases views (Active plans, Stalled, By workspace, Recently
-  completed, Knowledge, Plan-linked facts). Written once; the user may customize it.
-- `Plans.md`, `Knowledge.md`, `Activity.md`, `Projects.md` — generated indexes.
+- `Home.md` — start here: tally, what needs the user (approvals, blocked, stalled, drafts),
+  open plans per workspace with their next task, the last 7 days, the newest knowledge.
+- `agops.base` — Obsidian Bases views (Open plans, Stalled, By workspace, Recently
+  completed, Knowledge, Decisions and preferences, Plan-linked facts). Written once; the
+  user may customize it.
+- `Plans.md`, `Knowledge.md` (by topic, then scope), `Activity.md` (claims, blockers, ready,
+  last 30 days), `Projects.md` (projects with plans or knowledge), `Docs.md` — generated
+  indexes.
+- `notes.yaml` — the user's settings: `docs:` folders mirrored read-only into `docs/`, and
+  `topics:` rules that tag notes `topic/<name>`. Never edit it without being asked.
 - `plans/active/<id>.md` (open plans) and `plans/archive/<workspace>/<id>.md` (completed or
   cancelled; moved automatically unless its definition has an unsynced edit) — readable
   pages. The plan definition is `plans/.definitions/<id>.yaml` (hidden in Obsidian): edits
   there import as a new *unapproved* revision on `agops notes sync`. `knowledge/**` —
   read-only mirror.
-- Frontmatter `status`, `health`, `workspace`, `progress`, `last_activity` (plans) and `kind`,
-  `scope`, `updated`, `plan` (knowledge) are generated, as are the `agops` tags. Users may add
+- Frontmatter `status`, `health`, `workspace`, `progress`, `last_activity`, `topics` (plans)
+  and `kind`, `scope`, `updated`, `plan`, `project`, `topics` (knowledge) are generated, as
+  are the `agops` and `topic/*` tags. Users may add
   their own frontmatter, including `keep: true` on a knowledge note, and write under
   "My notes" (inside the `agops:personal` markers); both are preserved. Ids and hashes live
   in `.agops-notes.json`.
@@ -49,8 +56,8 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
    archive ... `) and retire the originals — only after the user agrees. For an entry the
    user wants to keep, add `keep: true` to that note's frontmatter (any key not
    listed above); it is preserved and makes `review` report `keep`.
-5. **Plans, ask:** from `plans`, list `stalled` and `blocked` plans, plus any plan you judge
-   superseded (a later plan covers the same subject — compare titles, goals and blocked
+5. **Plans, ask:** from `plans`, list `stalled` and `blocked` plans, drafts nobody will
+   approve, plus any plan you judge superseded (a later plan covers the same subject — compare titles, goals and blocked
    reasons). For each, give one line: plan, idle days, why, and the proposed action:
    - cancel: `agops plan cancel <id> --reason "<why>" --yes`
    - keep: it is waiting on something real (name it)

@@ -144,3 +144,15 @@ def test_blocked_task_can_be_unblocked_and_reclaimed(
     hub.unblock_task("shared-plan", "first", "claude", "two", "Fixture is available")
     assert [task["id"] for task in hub.ready_tasks()] == ["first"]
     hub.claim_task("shared-plan", "first", "claude", "two", project_paths[1])
+
+
+def test_a_draft_plan_can_be_cancelled_once(hub_repo: Path, plan_file: Path) -> None:
+    hub = Hub(hub_repo)
+    hub.draft_plan(plan_file, "codex", "draft-session")
+    hub.cancel_plan("shared-plan", "superseded")
+    assert hub.list_plans()[0]["status"] == "cancelled"
+    assert hub.ready_tasks() == []
+    with pytest.raises(ValueError, match="already cancelled"):
+        hub.cancel_plan("shared-plan", "again")
+    with pytest.raises(ValueError, match="Unknown plan"):
+        hub.cancel_plan("missing-plan", "nope")

@@ -170,6 +170,12 @@ agops plan draft plan.yaml
 agops plan approve my-plan
 ```
 
+`agops plan cancel my-plan --reason "..."` retires a plan, active or still a draft; it is
+interactive like approval. Two optional task fields only change how notes read: `summary`, a
+one-line gist shown first when the task is unfolded (otherwise the first sentences of `notes`
+or `instructions` are), and `phase`, which groups a plan note's tasks into sections in the order the
+phases first appear.
+
 ## Notes apps (Obsidian, Logseq, or any Markdown folder)
 
 Connect one dedicated folder to a hub profile. The folder contains ordinary portable Markdown, so
@@ -181,21 +187,31 @@ agops notes status
 agops notes sync
 ```
 
-The folder holds the whole working picture: `Plans.md` and the plan notes (`plans/active/<id>.md` while a plan is open,
-`plans/archive/<workspace>/<id>.md` once it is completed or cancelled; agops moves a note only when
-it has no unsynced edit),
+The folder holds the whole working picture: `Home.md`, `Plans.md` and the plan notes
+(`plans/active/<id>.md` while a plan is open, `plans/archive/<workspace>/<id>.md` once it is
+completed or cancelled; agops moves a note only when it has no unsynced edit),
 `knowledge/<scope>/<key>.md` with a `Knowledge.md` index for the knowledge entries, `Projects.md`
-for the registered repositories by workspace, and `Activity.md` for who has claimed what, what is
-blocked, and what is ready next. Only plans are two-way; knowledge, projects, and activity are
-a read-only mirror of the hub, so change knowledge with `agops knowledge add` rather than in the
-vault. Personal notes (the "My notes" section) are preserved in every note.
+for the repositories that have plans or knowledge (the rest folded), `Activity.md` for who has
+claimed what, what is blocked, what is ready next, and the last 30 days of events, and `Docs.md`
+for long-form documents mirrored from folders you choose. Only plans are two-way; knowledge,
+projects, activity, and docs are a read-only mirror, so change knowledge with
+`agops knowledge add` rather than in the vault. Personal notes (the "My notes" section) are
+preserved in every note.
 
-A plan note is a short page: goal, what needs you, open tasks, done tasks (folded), acceptance.
-The plan definition itself lives in a hidden file, `plans/.definitions/<id>.yaml`; edit that,
-not the note. Agops owns these plain frontmatter keys and rewrites them on every export: plan
-notes `tags`, `status`, `health`, `workspace`, `progress`, `last_activity`; knowledge notes
-`tags`, `kind`, `scope`, `updated`, `plan`. Your own keys and tags (such as `keep: true`) are
-kept. Ids, revisions and hashes are in `.agops-notes.json`. Notes from the older layout (an
+A plan note reads top-down: the goal's lead sentences (the full goal folds below), links to its
+docs and projects, what needs you (a pending revision lists the tasks it adds, removes, or
+changes), then the tasks once each, grouped by `phase` or else by where they stand (in progress,
+blocked, next, waiting on other tasks, done). Each task is a folded Obsidian callout coloured by
+status (`todo` open, `tip` in progress, `failure` blocked, `done` complete); unfold it for the
+gist, then the rest of its text, the done-when line, project, tier and dependencies, and the
+latest checkpoint. Below come acceptance criteria, related knowledge (entries
+linked to the plan or mentioning it), and the plan-level details. The plan definition itself
+lives in a hidden file, `plans/.definitions/<id>.yaml`; edit that, not the note. Agops owns these
+plain frontmatter keys and rewrites them on every export: plan notes `tags`, `status`, `health`,
+`workspace`, `progress`, `last_activity`, `topics`; knowledge notes `tags`, `kind`, `scope`,
+`updated`, `plan`, `project`, `topics`. Your own keys and tags (such as `keep: true`) are kept;
+`topic/*` tags are agops-owned. Inside an Obsidian vault the `plan` property is a full-path link,
+so a mirrored doc with the same file name never captures it. Ids, revisions and hashes are in `.agops-notes.json`. Notes from the older layout (an
 `agops_*` frontmatter and a YAML block in the note) are converted on the next sync; an unsynced
 edit in the old block moves to the `.yaml` file.
 
@@ -213,15 +229,32 @@ next sync retries it. When a newer revision is awaiting approval, the note lists
 approved revision and says "Revision N is waiting for approval"; the `.yaml` file holds the newer
 definition.
 
-`Home.md` is the overview: a one-line tally, what needs you (pending approvals, blocked tasks),
-active plans sorted by last activity, and a link to recently completed work. Every plan note and
+`Home.md` is the overview: a one-line tally; what needs you (pending approvals, blocked tasks,
+stalled plans, drafts to approve or cancel); one table of open plans per workspace with status,
+progress, the next task, and last activity; the last 7 days of events; the newest knowledge; and
+recently completed work. Every plan note and
 `Plans.md` carry a computed `health` (`live`, `waiting`, `blocked`, `stalled` after 7 idle
 days, `done`, `cancelled`, or `draft`), plus its workspace and progress, so the vault
 sorts and filters instead of just listing. `agops.base` is an Obsidian Bases file with ready-made
-views (active, stalled, by workspace, recently completed, knowledge, plan-linked facts) that
-filter on the `agops/plan` and `agops/knowledge` tags; agops writes it once and never overwrites
-your edits (a copy that still uses the old `agops_*` properties is kept as `agops.old.base` and
-replaced by the new default). `agops notes review` prints a read-only JSON triage
+views (open plans including drafts, stalled, by workspace, recently completed, knowledge,
+decisions and preferences, plan-linked facts) that filter on the `agops/plan` and
+`agops/knowledge` tags; agops writes it once and never overwrites your edits (an untouched earlier
+default is upgraded; a copy that still uses the old `agops_*` properties is kept as
+`agops.old.base` and replaced by the new default).
+
+`notes.yaml` in the folder is yours: agops writes a commented template once and only reads it
+after that. `docs:` lists folders whose Markdown and images are copied read-only into
+`docs/<folder>/` on every sync, so vault search and plan notes reach long-form documents; a plan
+links the docs named `<plan-id>.md` or `<plan-id>-*.md` and any whose path its definition
+mentions. Each Markdown copy carries its folder in its name (`workstreams/x.md` becomes
+`workstreams/x (workstreams).md`, with links between the docs rewritten), so a doc named after a
+plan never captures a `[[plan-id]]` link. Dot files, symlinks, and files matching credential
+patterns are skipped, and a copy edited in the vault is kept and no longer refreshed. `topics:` maps a topic name to project-id
+globs and keywords; a note gets `topic/<name>` when one of its projects matches or its title or
+key has a keyword, and `Knowledge.md` groups entries by topic (untagged ones by scope). Files an
+earlier layout generated (`views/*.base` on `agops_*` properties, `projects/*.md` notes with
+`agops_type: project`) are removed on sync; a project note with personal notes is kept and
+reported. `agops notes review` prints a read-only JSON triage
 report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
 `agops-notes` skill to act on. Add `keep: true` to a knowledge note's frontmatter to mark it kept;
 `agops notes review` then reports it as `keep` instead of flagging it again.

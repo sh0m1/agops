@@ -288,9 +288,12 @@ class Hub:
         validate_content(reason, "reason.md")
 
         def operation(state: State) -> tuple[dict[str, Any], str]:
-            plan_state = state.plans.get(plan_id)
-            if not plan_state or not plan_state.active:
-                raise ValueError(f"Plan is not active: {plan_id}")
+            load_plan(self.root, plan_id)  # an unknown plan raises here
+            plan_state = state.plans.get(plan_id) or PlanState(plan_id)
+            # A draft can be cancelled too: it is the only way to retire a plan never approved.
+            if plan_state.completed or plan_state.cancelled:
+                finished = "completed" if plan_state.completed else "cancelled"
+                raise ValueError(f"Plan is already {finished}: {plan_id}")
             if any(task.actively_claimed() for task in plan_state.tasks.values()):
                 raise ValueError("Release active task claims before cancelling the plan")
             event = self._base_event("plan_cancelled", "human", "interactive")

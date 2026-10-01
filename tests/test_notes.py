@@ -15,6 +15,7 @@ from agops.notes import (
     AGOPS_BASE,
     LEGACY_AGOPS_BASE,
     PERSONAL_START,
+    PREVIOUS_AGOPS_BASE,
     RETIRE_MIN_AGE_DAYS,
     NotesBridge,
     hub_fingerprint,
@@ -74,13 +75,15 @@ def test_connect_renders_portable_hybrid_notes(
     assert "<!-- agops:personal:start -->" in text
     assert "agops:definition" not in text
     for heading in ("# Shared plan", "**Goal:** Let agents cooperate.", "## Needs you",
-                    "## Open (2)", "## Done (0)", "## Acceptance", "## My notes"):
+                    "## Tasks (0/2 done)", "### Next (1)", "### Waiting on other tasks (1)",
+                    "## Acceptance", "## My notes"):
         assert heading in text
     assert "- **tested** The implementation is tested." in text
-    assert "- [ ] `first` First task — draft" in text
+    assert "> [!todo]- `first` First task — draft" in text
+    assert "> - **Done when:** Tests pass" in text
+    assert "> - `acme-widgets` · writes `src/first/**`" in text
     assert "- Revision 1 is waiting for approval" in text
     assert "`plans/.definitions/shared-plan.yaml`" in text
-    assert "> - write_scope: `src/first/**`" in text
     definition = yaml.safe_load(_definition_file(tmp_path).read_text(encoding="utf-8"))
     assert definition["id"] == "shared-plan" and len(definition["tasks"]) == 2
     assert "revision" not in definition
@@ -124,30 +127,31 @@ def test_plan_details_section_sits_between_acceptance_and_notes(
     assert "- **design_document:** docs/design.md" in text
     assert "  - **m1:** Ship it" in text
     assert "**Revision:** revision 1 · created_at " in text
-    assert "> [!todo]- `only` Only task" in text
-    assert "> - tier: high" in text and "> - write_scope: `src/a/**`" in text
-    assert "> - status: pending" in text
+    # Each task is shown once, as a folded callout; the details hold no second copy.
+    assert text.count("`only`") == 1
+    assert "> [!todo]- `only` Only task — draft\n> Do it.\n>\n" in text
+    assert "> - `acme-widgets` · tier high · writes `src/a/**`" in text
+    assert "### Tasks" not in text
 
 
-def test_plan_details_do_not_truncate_and_keep_multiline_inside_callout(
+def test_task_text_is_never_truncated_and_nests_under_its_gist(
     local_hub: Path, fake_home: Path, tmp_path: Path
 ) -> None:
     long_line = "word " * 200
     body = f"      {long_line}\n\n      second paragraph\n"
     text = _details_note(local_hub, tmp_path, "", body)
-    assert long_line.strip() in text
-    section = text.split("### Tasks", 1)[1].split("## My notes", 1)[0]
-    assert "\n>\n> second paragraph" in section
-    callout = [ln for ln in section.strip().splitlines() if ln]
-    assert all(ln.startswith(">") for ln in callout)
+    gist = next(line for line in text.splitlines() if line.startswith("> word"))
+    assert gist.endswith("…") and len(gist) < 220
+    assert f"> - {long_line.strip()}" in text
+    assert "> - second paragraph" in text
 
 
-def test_plan_details_omit_absent_optional_fields(
+def test_task_callout_omits_absent_optional_fields(
     local_hub: Path, fake_home: Path, tmp_path: Path
 ) -> None:
     text = _details_note(local_hub, tmp_path, "", "      Do it.\n")
-    for absent in ("read_only", "reasoning_effort", "> - model", "> - tier",
-                   "review_document", "reviewed_heads", "depends_on", "covers"):
+    for absent in ("read-only", "effort ", "model ", "tier ", "after `", "covers `",
+                   "review_document", "reviewed_heads"):
         assert absent not in text
 
 
@@ -407,10 +411,8 @@ def test_pending_definition_displays_only_approved_execution_tasks(
     hub.draft_plan_definition(current, "codex", "two", 1, expected_hash)
 
     text = (tmp_path / "vault" / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
-    assert "Revision 2 is waiting for approval" in text
-    summary, details = text.split("## Plan details")
-    assert "## Open (2)" in summary and "`unapproved`" not in summary
-    assert "`unapproved`" in details
+    assert "- Revision 2 is waiting for approval: adds `unapproved`" in text
+    assert "## Tasks (0/2 done)" in text and "]- `unapproved`" not in text
     assert "unapproved" in _definition_file(tmp_path).read_text(encoding="utf-8")
     assert bridge.status()["plans"][0]["status"] == "clean"
 
@@ -687,8 +689,10 @@ def test_plans_and_home_show_workspace_health_and_activity(
 
     home_text = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
     assert "1 active · 1 live" in home_text
-    assert "[Shared plan](plans/active/shared-plan.md)" in home_text
-    assert "![[agops.base#Active plans]]" in home_text
+    assert "| [Shared plan](plans/active/shared-plan.md) | live | 0/2 | `first` First task |" in (
+        home_text
+    )
+    assert "[[agops.base|Views]]" in home_text
 
 
 def test_agops_base_is_written_once_and_left_untouched(
@@ -702,11 +706,12 @@ def test_agops_base_is_written_once_and_left_untouched(
     assert "agops_" not in AGOPS_BASE and 'file.hasTag("agops/plan")' in AGOPS_BASE
     parsed = yaml.safe_load(AGOPS_BASE)
     assert [view["name"] for view in parsed["views"]] == [
-        "Active plans",
+        "Open plans",
         "Stalled",
         "By workspace",
         "Recently completed",
         "Knowledge",
+        "Decisions and preferences",
         "Plan-linked facts",
     ]
 
@@ -727,6 +732,11 @@ def test_agops_base_upgrades_only_the_untouched_old_default(
     base_path.write_text(LEGACY_AGOPS_BASE, encoding="utf-8")
     assert bridge.render_all()["warnings"] == []
     assert base_path.read_text(encoding="utf-8") == AGOPS_BASE
+
+    base_path.write_text(PREVIOUS_AGOPS_BASE, encoding="utf-8")
+    assert bridge.render_all()["warnings"] == []
+    assert base_path.read_text(encoding="utf-8") == AGOPS_BASE
+    assert not (tmp_path / "vault" / "agops.old.base").exists()
 
     customized = LEGACY_AGOPS_BASE.replace("Active plans", "My plans")
     base_path.write_text(customized, encoding="utf-8")
@@ -854,7 +864,8 @@ def test_new_plan_renders_under_active_and_is_linked_from_indexes(
     assert _vault_note(tmp_path, "plans/active/shared-plan.md").is_file()
     assert not _vault_note(tmp_path, "plans/shared-plan.md").exists()
     home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
-    assert "(plans/active/shared-plan.md)" not in home  # drafts are not in Home's active table
+    assert "- Approve or cancel the draft: [Shared plan](plans/active/shared-plan.md)" in home
+    assert "| draft | 0/2 | `first` First task |" in home
     plans_text = _vault_note(tmp_path, "Plans.md").read_text(encoding="utf-8")
     assert "[Shared plan](plans/active/shared-plan.md)" in plans_text
     sidecar = json.loads(_vault_note(tmp_path, ".agops-notes.json").read_text())
@@ -995,7 +1006,7 @@ def test_home_groups_active_plans_by_workspace(
     hub.approve_plan("second-plan")
     _connected(hub, tmp_path / "vault")
     home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
-    section = home.split("## Active plans")[1].split("## Views")[0]
+    section = home.split("## Plans")[1].split("## Last 7 days")[0]
     assert "### Acme" in section and "### Globex" in section
     assert "(plans/active/second-plan.md)" in section
 
@@ -1015,22 +1026,27 @@ def test_plan_note_reads_like_a_page(
 
     assert "live · Acme · 0/2 done · last " in text
     assert "## Needs you\n\n_Nothing._" in text
-    assert "- [ ] `first` First task — claimed by codex" in text
-    assert "- [ ] `second` Second task — waiting on `first`" in text
-    summary = next(line for line in text.splitlines() if line.startswith("  - Half way"))
-    assert len(summary) <= 165 and summary.endswith("…")
-    assert "_None yet._" in text
+    assert "### In progress (1)\n\n> [!tip]- `first` First task — claimed by codex" in text
+    assert "> [!todo]- `second` Second task — after `first`" in text
+    summary = next(
+        line for line in text.splitlines() if line.startswith("> - **Latest:** Half way")
+    )
+    assert len(summary) <= 177 and summary.endswith("…")
+    assert "### Done" not in text
 
     hub.block_task("shared-plan", "first", "codex", "session-one", "Waiting on access.")
     text = _vault_note(tmp_path, "plans/active/shared-plan.md").read_text(encoding="utf-8")
     assert "- Blocked: `first` — Waiting on access." in text
-    assert "- [ ] `first` First task — blocked: Waiting on access." in text
+    assert "### Blocked (1)\n\n> [!failure]- `first` First task — blocked: Waiting on access." in (
+        text
+    )
 
     hub.claim_task("shared-plan", "first", "codex", "session-one", widgets)
     hub.complete_task("shared-plan", "first", "codex", "session-one", "Done.", ["tests pass"])
     text = _vault_note(tmp_path, "plans/active/shared-plan.md").read_text(encoding="utf-8")
-    assert "## Done (1)\n\n> [!done]- 1 tasks\n> - `first` First task" in text
-    assert "## Open (1)" in text and "- [ ] `second` Second task — ready" in text
+    assert "### Done (1)\n\n> [!done]- `first` First task\n" in text
+    assert "> - **Result:** Done.\n> - **Evidence:** tests pass" in text
+    assert "## Tasks (1/2 done)" in text and "> [!todo]- `second` Second task — ready" in text
 
 
 def test_old_format_note_migrates_keeping_personal_notes_and_custom_keys(
@@ -1115,3 +1131,261 @@ def test_user_keep_and_tags_survive_and_legacy_keys_are_stripped(
     assert front["tags"] == ["mine", "agops", "agops/knowledge"]
     entry = bridge.review()["knowledge"][0]
     assert entry["kept"] is True and entry["verdict"] == "keep"
+
+
+def _draft_yaml(hub: Hub, tmp_path: Path, text: str) -> None:
+    path = tmp_path / "extra-plan.yaml"
+    path.write_text(text, encoding="utf-8")
+    hub.draft_plan(path, "codex", "one")
+
+
+def test_phases_group_tasks_and_a_summary_is_the_gist(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    _draft_yaml(
+        hub,
+        tmp_path,
+        "id: phased-plan\ntitle: Phased plan\ngoal: Ship in waves.\ntasks:\n"
+        "  - id: alpha\n    title: Alpha\n    project: acme-widgets\n    phase: Wave 1\n"
+        "    summary: Build the alpha slice.\n    notes: Long background. More detail here.\n"
+        "  - id: loose\n    title: Loose\n    project: acme-widgets\n"
+        "  - id: beta\n    title: Beta\n    project: acme-widgets\n    phase: Wave 2\n"
+        "    depends_on: [alpha]\n",
+    )
+    _connected(hub, tmp_path / "vault")
+    text = _vault_note(tmp_path, "plans/active/phased-plan.md").read_text(encoding="utf-8")
+    headings = [line for line in text.splitlines() if line.startswith("### ")]
+    assert headings == ["### Wave 1 (0/1 done)", "### Wave 2 (0/1 done)", "### Other (0/1 done)"]
+    assert (
+        "> [!todo]- `alpha` Alpha — draft\n> Build the alpha slice.\n>\n"
+        "> - Long background. More detail here.\n"
+    ) in text
+
+
+def test_long_goal_shows_its_lead_and_folds_the_rest(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    _draft_yaml(
+        hub,
+        tmp_path,
+        "id: long-goal\ntitle: Long goal\ngoal: Do the main thing. " + "Process detail. " * 30
+        + "\ntasks:\n  - id: only\n    title: Only\n    project: acme-widgets\n",
+    )
+    _connected(hub, tmp_path / "vault")
+    text = _vault_note(tmp_path, "plans/active/long-goal.md").read_text(encoding="utf-8")
+    lead = next(line for line in text.splitlines() if line.startswith("**Goal:**"))
+    assert lead.startswith("**Goal:** Do the main thing. Process detail.") and len(lead) < 300
+    assert "> [!quote]- Full goal\n> Do the main thing." in text
+
+
+def test_home_and_activity_show_recent_events(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    first = hub.add_knowledge("global", "testing", "Testing", "Keep evidence.", "codex", "one")
+    hub.add_knowledge(
+        "global", "testing", "Testing", "Keep concrete evidence.", "codex", "one",
+        supersedes=first["payload"]["id"],
+    )
+    _connected(hub, tmp_path / "vault")
+    home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
+    recent = home.split("## Last 7 days")[1].split("## Recent knowledge")[0]
+    assert "[Shared plan](plans/active/shared-plan.md) · revision 1 drafted" in recent
+    # Two same-day revisions of one entry are one line, and it was new that day.
+    assert recent.count("knowledge added: [Testing](knowledge/global/testing.md) · fact") == 1
+    assert "knowledge updated" not in recent
+    newest = home.split("## Recent knowledge")[1]
+    assert "- [Testing](knowledge/global/testing.md) · fact · " in newest
+    activity = _vault_note(tmp_path, "Activity.md").read_text(encoding="utf-8")
+    assert "## Last 30 days" in activity and "· revision 1 drafted" in activity
+
+
+def test_topics_from_settings_tag_notes_and_group_the_index(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.add_knowledge(
+        "project:acme-widgets", "deploys", "Deploys", "Deploy from main.", "codex", "one"
+    )
+    hub.add_knowledge("global", "vpn-routes", "VPN routes", "Routes via the hub.", "codex", "one")
+    hub.add_knowledge("global", "style", "Style", "Plain prose, even about vpn.", "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    settings = vault / "notes.yaml"
+    assert "docs: []" in settings.read_text(encoding="utf-8")  # the template, written once
+    settings.write_text(
+        "topics:\n  widgets:\n    projects: ['acme-*']\n  networking:\n    keywords: [vpn]\n",
+        encoding="utf-8",
+    )
+    assert bridge.render_all()["warnings"] == []
+    deploys_path = vault / "knowledge" / "project" / "acme-widgets" / "deploys.md"
+    deploys = _frontmatter(deploys_path.read_text(encoding="utf-8"))
+    assert deploys["topics"] == ["widgets"] and "topic/widgets" in deploys["tags"]
+    assert deploys["project"] == "acme-widgets"
+    routes = _frontmatter((vault / "knowledge/global/vpn-routes.md").read_text(encoding="utf-8"))
+    assert routes["topics"] == ["networking"]
+    style = _frontmatter((vault / "knowledge/global/style.md").read_text(encoding="utf-8"))
+    assert "topics" not in style  # a mention in the body alone does not tag
+    plan = _frontmatter((vault / "plans/active/shared-plan.md").read_text(encoding="utf-8"))
+    assert plan["topics"] == ["widgets"] and "topic/widgets" in plan["tags"]
+    index = (vault / "Knowledge.md").read_text(encoding="utf-8")
+    assert "## widgets (1)" in index and "## networking (1)" in index
+    assert "## global (1)" in index and "`tag:#topic/<name>`" in index
+    assert settings.read_text(encoding="utf-8").startswith("topics:")  # never rewritten
+
+    settings.write_text("topics: {}\n", encoding="utf-8")
+    bridge.render_all()
+    assert "topic/widgets" not in deploys_path.read_text(encoding="utf-8")
+
+
+def test_invalid_settings_are_reported_not_fatal(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    (tmp_path / "vault" / "notes.yaml").write_text("docs: nope\ntopics: [x]\n", encoding="utf-8")
+    warnings = bridge.render_all()["warnings"]
+    assert any("docs must be a list" in warning for warning in warnings)
+    assert any("topics must be a mapping" in warning for warning in warnings)
+    assert _vault_note(tmp_path, "plans/active/shared-plan.md").is_file()
+
+
+def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    source = tmp_path / "reference"
+    (source / "workstreams").mkdir(parents=True)
+    (source / "workstreams" / "shared-plan.md").write_text(
+        "# Shared plan story\n\nSee [notes](../notes.md#top) and [site](https://x.test/a.md).\n"
+    )
+    (source / "notes.md").write_text("# Notes\n")
+    (source / "diagram.png").write_bytes(b"\x89PNG")
+    (source / ".hidden.md").write_text("# Hidden\n")
+    (source / "board.drawio").write_text("<xml/>")
+    (source / "leak.md").write_text("key AKIA" + "A" * 16 + "\n")
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    (vault / "notes.yaml").write_text(f"docs:\n  - {source}\n", encoding="utf-8")
+
+    result = bridge.render_all()
+    mirror = vault / "docs" / "reference"
+    copied = sorted(p.relative_to(mirror).as_posix() for p in mirror.rglob("*") if p.is_file())
+    # Copies carry their folder in the name, so `[[shared-plan]]` still means the plan note.
+    assert copied == [
+        "diagram.png", "notes (reference).md", "workstreams/shared-plan (workstreams).md"
+    ]
+    assert [p for p in vault.rglob("shared-plan.md")] == [vault / "plans/active/shared-plan.md"]
+    story = (mirror / "workstreams" / "shared-plan (workstreams).md").read_text(encoding="utf-8")
+    assert "[notes](<../notes (reference).md#top>)" in story
+    assert "[site](https://x.test/a.md)" in story
+    assert any("leak" in w and "credential" in w for w in result["warnings"])
+    assert result["mirrored"]["docs"] == 2
+    plan = (vault / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
+    assert (
+        "**Docs:** [Shared plan story]"
+        "(<../../docs/reference/workstreams/shared-plan (workstreams).md>)"
+    ) in plan
+    index = (vault / "Docs.md").read_text(encoding="utf-8")
+    assert (
+        "- [Shared plan story](<docs/reference/workstreams/shared-plan (workstreams).md>) · "
+        "[Shared plan](plans/active/shared-plan.md)"
+    ) in index
+
+    copy = mirror / "notes (reference).md"
+    copy.write_text("# Notes\n\nMy edit.\n")
+    (source / "notes.md").write_text("# Notes v2\n")
+    result = bridge.render_all()
+    assert copy.read_text() == "# Notes\n\nMy edit.\n"
+    assert any("notes (reference).md: edited in the vault" in w for w in result["warnings"])
+
+    (source / "workstreams" / "shared-plan.md").unlink()
+    bridge.render_all()
+    assert not (mirror / "workstreams").exists()
+    assert "**Docs:**" not in (vault / "plans/active/shared-plan.md").read_text(encoding="utf-8")
+
+
+def test_legacy_views_and_project_notes_are_removed(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    (vault / "views").mkdir()
+    (vault / "views" / "Plans.base").write_text("properties:\n  note.agops_title: {}\n")
+    (vault / "views" / "Mine.base").write_text("properties:\n  note.agops_title: {}\n")
+    (vault / "projects").mkdir()
+    old = "---\nagops_type: project\n---\n\n# x\n\nMARK\n<!-- agops:personal:end -->\n"
+    (vault / "projects" / "plain.md").write_text(old.replace("MARK", PERSONAL_START))
+    (vault / "projects" / "kept.md").write_text(old.replace("MARK", PERSONAL_START + "\nMine."))
+    (vault / "projects" / "user.md").write_text("# My own project note\n")
+
+    result = bridge.render_all()
+    assert sorted(result["removed"]) == ["projects/plain.md", "views/Plans.base"]
+    assert (vault / "views" / "Mine.base").exists()
+    assert (vault / "projects" / "kept.md").exists() and (vault / "projects" / "user.md").exists()
+    assert any("projects/kept.md" in warning for warning in result["warnings"])
+
+
+def test_plan_links_use_the_full_vault_path_inside_an_obsidian_vault(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    (tmp_path / "vault" / ".obsidian").mkdir(parents=True)
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.add_knowledge("global", "about", "About", "Notes on shared-plan.", "codex", "one")
+    NotesBridge(hub).connect(tmp_path / "vault" / "agops")
+    text = (tmp_path / "vault" / "agops" / "knowledge" / "global" / "about.md").read_text()
+    assert _frontmatter(text)["plan"] == "[[agops/plans/active/shared-plan|shared-plan]]"
+    assert "_Plan: [Shared plan](../../plans/active/shared-plan.md)_" in text
+    plan = (tmp_path / "vault" / "agops" / "plans" / "active" / "shared-plan.md").read_text()
+    assert "## Related knowledge (1)\n\n- [About](../../knowledge/global/about.md) · fact" in plan
+
+
+def test_link_plan_follows_distinctive_task_ids() -> None:
+    tasks = {"p0-obo-connect-deputy": "comms", "first": "shared-plan"}
+    entry = {"key": "obo-deputy", "title": "OBO", "body": "Tracked as task p0-obo-connect-deputy."}
+    assert link_plan(entry, ["comms", "shared-plan"], tasks) == "comms"
+    short = {"key": "x", "title": "x", "body": "the first step"}
+    assert link_plan(short, ["comms", "shared-plan"], tasks) is None
+    longer = {"key": "x", "title": "x", "body": "see p0-obo-connect-deputy-v2 instead"}
+    assert link_plan(longer, ["comms"], tasks) is None
+
+
+def test_projects_index_lists_only_projects_with_plans_or_knowledge(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.register_project(make_project(tmp_path / "widgets"), workspace="Acme")
+    gadgets = make_project(tmp_path / "gadgets", "https://github.com/acme/gadgets.git")
+    hub.register_project(gadgets, workspace="Acme")
+    hub.draft_plan(plan_file, "codex", "one")
+    _connected(hub, tmp_path / "vault")
+    projects = _vault_note(tmp_path, "Projects.md").read_text(encoding="utf-8")
+    assert "_1 of 2 registered repositories have plans or knowledge._" in projects
+    assert "### widgets" in projects
+    assert "- Plan: [Shared plan](plans/active/shared-plan.md) · draft · 2 open tasks here" in (
+        projects
+    )
+    assert "> [!note]- 1 more registered repository without plans or knowledge" in projects
+    assert "> - `acme-gadgets`" in projects
+
+
+def test_cancelled_draft_leaves_home_and_moves_to_archive(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    _connected(hub, tmp_path / "vault")
+    hub.cancel_plan("shared-plan", "superseded")
+    home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
+    assert "Approve or cancel" not in home and "## Plans\n\n_None._" in home
+    assert "· cancelled — superseded" in home
+    assert next((tmp_path / "vault" / "plans" / "archive").rglob("shared-plan.md")).is_file()

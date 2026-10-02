@@ -244,9 +244,11 @@ default is upgraded; a copy that still uses the old `agops_*` properties is kept
 
 `notes.yaml` in the folder is yours: agops writes a commented template once and only reads it
 after that. `docs:` lists folders whose Markdown and images are copied read-only into
-`docs/<folder>/` on every sync, so vault search and plan notes reach long-form documents; a plan
-links the docs named `<plan-id>.md` or `<plan-id>-*.md` and any whose path its definition
-mentions. Each Markdown copy carries its folder in its name (`workstreams/x.md` becomes
+`docs/<folder>/` on every sync, so vault search and plan notes reach long-form documents. HTML
+files are mirrored too, as pages: an agent's web page with diagrams sits beside the docs, keeps its
+name, takes its title from `<title>`, and opens in the browser from Obsidian. A plan links the
+docs and pages named `<plan-id>.*` or `<plan-id>-*` and any whose path its definition mentions,
+on separate `Docs:` and `Pages:` lines; `Home.md` lists the newest pages. Each Markdown copy carries its folder in its name (`workstreams/x.md` becomes
 `workstreams/x (workstreams).md`, with links between the docs rewritten), so a doc named after a
 plan never captures a `[[plan-id]]` link. Dot files, symlinks, and files matching credential
 patterns are skipped, and a copy edited in the vault is kept and no longer refreshed. `topics:` maps a topic name to project-id

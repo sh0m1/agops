@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import fnmatch
 import hashlib
+import html
 import json
 import os
 import posixpath
@@ -434,7 +435,9 @@ docs: []
 topics: {}
 """
 DOCS_DIR = "docs"
-DOC_SUFFIXES = frozenset({".md", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"})
+DOC_SUFFIXES = frozenset({".md", ".html", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"})
+# Agents' web pages (diagrams, interactive views) are mirrored as pages beside the docs.
+PAGE_SUFFIX = ".html"
 MAX_DOC_BYTES = 10 * 1024 * 1024
 # Files an earlier notes layout generated. They are removed when they still carry its markers.
 LEGACY_VIEWS = ("views/Plans.base", "views/Knowledge.base", "views/Projects.base")
@@ -442,6 +445,7 @@ LEGACY_PROJECTS_DIR = "projects"
 HOME_EVENT_DAYS = 7
 HOME_EVENT_LIMIT = 15
 HOME_KNOWLEDGE_LIMIT = 8
+HOME_PAGE_LIMIT = 5
 ACTIVITY_EVENT_DAYS = 30
 ACTIVITY_EVENT_LIMIT = 200
 BUCKET_TITLES = {
@@ -463,6 +467,7 @@ _KEY_DATE_SUFFIX = re.compile(r"-(?:\d{4}-\d{2}-\d{2}|\d{8})$")
 _ID_DATE_SUFFIX = re.compile(r"-\d{8}$")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`#(\[\"'])")
 _LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_PAGE_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _DOC_LINK = re.compile(r"\]\(([^)\s<>]+?\.md)(#[^)\s<>]*)?\)")
 
 
@@ -1165,6 +1170,14 @@ class _Context:
         ]
         return sorted(found, key=lambda doc: (doc["stem"] != plan_id, doc["relative"]))
 
+    def doc_plans(self) -> dict[str, list[dict[str, Any]]]:
+        """Each doc's or page's relative path → the plans that link it."""
+        used_by: dict[str, list[dict[str, Any]]] = {}
+        for plan in self.plans.values():
+            for doc in plan.get("docs") or []:
+                used_by.setdefault(doc["relative"], []).append(plan)
+        return used_by
+
     def plan_knowledge(self, plan_id: str) -> list[dict[str, Any]]:
         """Entries linked to the plan, plus any that mention its id."""
         related = [
@@ -1419,9 +1432,14 @@ class NotesBridge:
             lines.extend([f"**Goal:** {lead}", ""])
             if rest or len(paragraphs) > 1:
                 lines.extend(["> [!quote]- Full goal", *_quoted(goal), ""])
-        docs = [_link(doc["title"], note, doc["relative"]) for doc in context.plan_docs(plan)]
-        if docs:
-            lines.extend(["**Docs:** " + " · ".join(docs), ""])
+        for label, kind in (("Docs", "doc"), ("Pages", "page")):
+            links = [
+                _link(doc["title"], note, doc["relative"])
+                for doc in context.plan_docs(plan)
+                if doc["kind"] == kind
+            ]
+            if links:
+                lines.extend([f"**{label}:** " + " · ".join(links), ""])
         if overview["projects"]:
             lines.extend(["**Projects:** " + _code_items(overview["projects"]), ""])
 
@@ -1688,6 +1706,22 @@ class NotesBridge:
         if len(recent) > HOME_EVENT_LIMIT:
             lines.append(f"- _{len(recent) - HOME_EVENT_LIMIT} more in [[Activity]]_")
 
+        lines.extend(["", "## Recent pages", ""])
+        pages = sorted(
+            (doc for doc in context.docs if doc["kind"] == "page"),
+            key=lambda doc: (doc["modified"], doc["relative"]),
+            reverse=True,
+        )[:HOME_PAGE_LIMIT]
+        used_by = context.doc_plans()
+        for page in pages:
+            plans = "".join(f" · {link(plan)}" for plan in used_by.get(page["relative"], []))
+            lines.append(
+                f"- {_link(page['title'], 'Home.md', page['relative'])} · "
+                f"{page['modified'].isoformat()}{plans}"
+            )
+        if not pages:
+            lines.append("_None._")
+
         lines.extend(["", "## Recent knowledge", ""])
         newest_entries = sorted(
             context.entries, key=lambda entry: str(entry.get("created_at") or ""), reverse=True
@@ -1929,7 +1963,11 @@ class NotesBridge:
                 if len(data) > MAX_DOC_BYTES:
                     warnings.append(f"{relative}: larger than {MAX_DOC_BYTES} bytes; skipped")
                     continue
-                text = data.decode("utf-8", errors="replace") if suffix == ".md" else ""
+                text = (
+                    data.decode("utf-8", errors="replace")
+                    if suffix in {".md", PAGE_SUFFIX}
+                    else ""
+                )
                 if any(pattern.search(text) for pattern in SECRET_PATTERNS):
                     warnings.append(f"{relative}: looks like it holds a credential; skipped")
                     continue
@@ -1953,17 +1991,24 @@ class NotesBridge:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(data)
                 produced[relative] = digest
-                if suffix == ".md":
-                    headings = (
-                        line[2:].strip() for line in text.splitlines() if line.startswith("# ")
-                    )
+                if suffix in {".md", PAGE_SUFFIX}:
+                    if suffix == PAGE_SUFFIX:
+                        found = _PAGE_TITLE.search(text)
+                        title = " ".join(html.unescape(found.group(1)).split()) if found else ""
+                    else:
+                        headings = (
+                            line[2:].strip() for line in text.splitlines() if line.startswith("# ")
+                        )
+                        title = next(headings, "")
                     docs.append(
                         {
                             "relative": relative,
-                            "title": next(headings, "") or file.stem,
+                            "kind": "page" if suffix == PAGE_SUFFIX else "doc",
+                            "title": title or file.stem,
                             "stem": file.stem,
                             "tail": f"{file.parent.name}/{file.name}",
                             "group": posixpath.dirname(relative)[len(DOCS_DIR) + 1 :],
+                            "modified": datetime.fromtimestamp(file.stat().st_mtime).date(),
                         }
                     )
         for relative in sorted(set(known) - set(produced)):
@@ -1984,18 +2029,16 @@ class NotesBridge:
         if not context.docs:
             lines.append(
                 f"_No docs folders are configured. List them under `docs:` in `{SETTINGS_FILE}`; "
-                "each sync then copies their Markdown here, read-only._"
+                "each sync then copies their Markdown and HTML pages here, read-only._"
             )
             return _tidy(lines)
+        pages = sum(1 for doc in context.docs if doc["kind"] == "page")
         lines.append(
-            f"_{len(context.docs)} documents, copied read-only from the folders in "
-            f"`{SETTINGS_FILE}` on every sync. Edit the source; a copy edited here is no longer "
-            "refreshed._"
+            f"_{_count(len(context.docs) - pages, 'document')} and {_count(pages, 'page')}, "
+            f"copied read-only from the folders in `{SETTINGS_FILE}` on every sync. Edit the "
+            "source; a copy edited here is no longer refreshed._"
         )
-        used_by: dict[str, list[dict[str, Any]]] = {}
-        for plan_id, plan in context.plans.items():
-            for doc in plan.get("docs") or []:
-                used_by.setdefault(doc["relative"], []).append(context.plans[plan_id])
+        used_by = context.doc_plans()
         groups: dict[str, list[dict[str, Any]]] = {}
         for doc in context.docs:
             groups.setdefault(doc["group"], []).append(doc)
@@ -2008,7 +2051,10 @@ class NotesBridge:
                     suffix = " · " + ", ".join(
                         _link(plan["title"], "Docs.md", plan["note_path"]) for plan in plans
                     )
-                lines.append(f"- {_link(doc['title'], 'Docs.md', doc['relative'])}{suffix}")
+                kind = " · page" if doc["kind"] == "page" else ""
+                lines.append(
+                    f"- {_link(doc['title'], 'Docs.md', doc['relative'])}{kind}{suffix}"
+                )
         return _tidy(lines)
 
 

@@ -21,8 +21,9 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
 - `Plans.md`, `Knowledge.md` (by topic, then scope), `Activity.md` (claims, blockers, ready,
   last 30 days), `Projects.md` (projects with plans or knowledge), `Docs.md` — generated
   indexes.
-- `notes.yaml` — the user's settings: `docs:` folders mirrored read-only into `docs/`, and
-  `topics:` rules that tag notes `topic/<name>`. Never edit it without being asked.
+- `notes.yaml` — the user's settings: `docs:` folders mirrored read-only into `docs/`
+  (Markdown docs and HTML pages; a plan links those named after it), and `topics:` rules that
+  tag notes `topic/<name>`. Never edit it without being asked.
 - `plans/active/<id>.md` (open plans) and `plans/archive/<workspace>/<id>.md` (completed or
   cancelled; moved automatically unless its definition has an unsynced edit) — readable
   pages. The plan definition is `plans/.definitions/<id>.yaml` (hidden in Obsidian): edits

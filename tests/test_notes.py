@@ -1268,6 +1268,12 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
     (source / ".hidden.md").write_text("# Hidden\n")
     (source / "board.drawio").write_text("<xml/>")
     (source / "leak.md").write_text("key AKIA" + "A" * 16 + "\n")
+    (source / "workstreams" / "shared-plan-flow.html").write_text(
+        "<html><head><title>Flow &amp;\n map</title></head><body>diagram</body></html>"
+    )
+    (source / "pages").mkdir()
+    (source / "pages" / "2026-10-02-other.html").write_text("<p>no title</p>")
+    (source / "pages" / "leak.html").write_text("<p>AKIA" + "B" * 16 + "</p>")
     hub = Hub(local_hub, profile="default")
     hub.draft_plan(plan_file, "codex", "one")
     bridge = _connected(hub, tmp_path / "vault")
@@ -1278,25 +1284,39 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
     mirror = vault / "docs" / "reference"
     copied = sorted(p.relative_to(mirror).as_posix() for p in mirror.rglob("*") if p.is_file())
     # Copies carry their folder in the name, so `[[shared-plan]]` still means the plan note.
+    # Pages keep their names: Obsidian resolves [[name]] only to Markdown notes.
     assert copied == [
-        "diagram.png", "notes (reference).md", "workstreams/shared-plan (workstreams).md"
+        "diagram.png",
+        "notes (reference).md",
+        "pages/2026-10-02-other.html",
+        "workstreams/shared-plan (workstreams).md",
+        "workstreams/shared-plan-flow.html",
     ]
     assert [p for p in vault.rglob("shared-plan.md")] == [vault / "plans/active/shared-plan.md"]
     story = (mirror / "workstreams" / "shared-plan (workstreams).md").read_text(encoding="utf-8")
     assert "[notes](<../notes (reference).md#top>)" in story
     assert "[site](https://x.test/a.md)" in story
-    assert any("leak" in w and "credential" in w for w in result["warnings"])
-    assert result["mirrored"]["docs"] == 2
+    assert any("leak (reference).md" in w and "credential" in w for w in result["warnings"])
+    assert any("pages/leak.html" in w and "credential" in w for w in result["warnings"])
+    assert result["mirrored"]["docs"] == 4
     plan = (vault / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
     assert (
         "**Docs:** [Shared plan story]"
         "(<../../docs/reference/workstreams/shared-plan (workstreams).md>)"
     ) in plan
+    assert "**Pages:** [Flow & map](../../docs/reference/workstreams/shared-plan-flow.html)" in plan
     index = (vault / "Docs.md").read_text(encoding="utf-8")
     assert (
         "- [Shared plan story](<docs/reference/workstreams/shared-plan (workstreams).md>) · "
         "[Shared plan](plans/active/shared-plan.md)"
     ) in index
+    assert "_2 documents and 2 pages," in index
+    assert "- [2026-10-02-other](docs/reference/pages/2026-10-02-other.html) · page" in index
+    home = (vault / "Home.md").read_text(encoding="utf-8")
+    recent = home.split("## Recent pages")[1].split("## Recent knowledge")[0]
+    assert "[Flow & map](docs/reference/workstreams/shared-plan-flow.html) · " in recent
+    assert "· [Shared plan](plans/active/shared-plan.md)" in recent
+    assert "[2026-10-02-other](docs/reference/pages/2026-10-02-other.html)" in recent
 
     copy = mirror / "notes (reference).md"
     copy.write_text("# Notes\n\nMy edit.\n")
@@ -1307,8 +1327,9 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
 
     (source / "workstreams" / "shared-plan.md").unlink()
     bridge.render_all()
-    assert not (mirror / "workstreams").exists()
-    assert "**Docs:**" not in (vault / "plans/active/shared-plan.md").read_text(encoding="utf-8")
+    assert not (mirror / "workstreams" / "shared-plan (workstreams).md").exists()
+    plan = (vault / "plans/active/shared-plan.md").read_text(encoding="utf-8")
+    assert "**Docs:**" not in plan and "**Pages:**" in plan
 
 
 def test_legacy_views_and_project_notes_are_removed(

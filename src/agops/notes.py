@@ -685,7 +685,8 @@ def _task_callout(
     else:
         kind, detail = "todo", "ready"
     head = f"> [!{kind}]- `{task['id']}` {title}" + (f" — {detail}" if detail else "")
-    return [head, *(f"> {line}".rstrip() for line in _task_body(task, current))]
+    body = (f"> {_escape_html(line)}".rstrip() for line in _task_body(task, current))
+    return [_escape_html(head), *body]
 
 
 def _task_body(task: dict[str, Any], current: TaskState | None) -> list[str]:
@@ -742,8 +743,18 @@ def _code_items(value: Any) -> str:
     return ", ".join(f"`{item}`" for item in _as_list(value))
 
 
+_HTML_OPEN = re.compile(r"<(?=[A-Za-z/!])")
+
+
+def _escape_html(line: str) -> str:
+    """Keep Obsidian from reading api:<org> as an HTML tag; code spans stay as written."""
+    parts = line.split("`")
+    return "`".join(part if i % 2 else _HTML_OPEN.sub("&lt;", part) for i, part in enumerate(parts))
+
+
 def _quoted(text: str) -> list[str]:
-    return [f"> {line}".rstrip() if line else ">" for line in text.strip("\n").split("\n")]
+    lines = (_escape_html(line) for line in text.strip("\n").split("\n"))
+    return [f"> {line}".rstrip() if line else ">" for line in lines]
 
 
 def _plan_details(plan: dict[str, Any]) -> list[str]:

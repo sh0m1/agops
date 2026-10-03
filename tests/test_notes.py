@@ -1410,3 +1410,10 @@ def test_cancelled_draft_leaves_home_and_moves_to_archive(
     assert "Approve or cancel" not in home and "## Plans\n\n_None._" in home
     assert "· cancelled — superseded" in home
     assert next((tmp_path / "vault" / "plans" / "archive").rglob("shared-plan.md")).is_file()
+
+def test_plan_details_escape_html_like_tags_outside_code_spans(
+    local_hub: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    instructions = "      Use api:<org> and `keep <this>` as written.\n"
+    text = _details_note(local_hub, tmp_path, "", instructions)
+    assert "api:&lt;org>" in text and "`keep <this>`" in text and "api:<org>" not in text

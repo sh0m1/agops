@@ -31,9 +31,11 @@ curl -fsSL https://raw.githubusercontent.com/sh0m1/agops/main/install.sh \
 To go back to a machine-local memory, `agops setup --local` detaches and forgets the remote
 (your local history is kept). Other flags: `--ref <ref>` to pick a tag, branch, or commit,
 `--keep-claude-memory` to leave Claude Code's automatic memory on, and `--dry-run` to print
-the commands without touching
-anything. Manual equivalent: `uv tool install git+https://github.com/sh0m1/agops@main` then
-`agops setup [--remote <url> | --local] [--profile NAME]`.
+the commands without touching anything. Manual equivalent:
+`uv tool install git+https://github.com/sh0m1/agops@main` then
+`agops setup [--remote <url> | --local] [--profile NAME]`. Add `--runtime <path>` to keep the
+profile's Git clone somewhere other than the default (`~/.local/share/agops/repo`, or
+`~/.local/share/agops/<profile>` for a named profile).
 
 `setup` adds bounded managed blocks to the Codex and Claude user instruction files and registers
 the MCP server with whichever of `codex` and `claude` are on `PATH` (others are reported as
@@ -127,7 +129,11 @@ default, and if `AGOPS_REPO` is also set the brief warns that it overrides the p
 resolves to; `agops profile default NAME` changes the default.
 
 Upgrading from an earlier version: re-run `agops setup` once so the MCP registration stops
-pinning a hub path; `agops doctor` reports `mcp_pinned` until you do.
+pinning a hub path; `agops doctor` reports `mcp_pinned` until you do. An install made before
+the tool had its current name is migrated by the same `setup` run. It moves the old config,
+data and state directories, rewrites the managed blocks, and removes the old MCP registration.
+It deletes no data: if an old and a new path both exist, it leaves both untouched and warns.
+`agops doctor` reports `legacy_install` until nothing is left to move.
 
 ## Everyday workflow
 
@@ -146,14 +152,34 @@ agops task checkpoint PLAN TASK --summary "Implemented parser" --evidence "pytes
 agops task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12 passed"
 ```
 
-`agops plan list` and `agops task ready [--tier NAME]` show what is available. Set
-`AGOPS_ACTOR` to name the agent and `AGOPS_SESSION` to pin a session id explicitly.
+`agops plan list` and `agops task ready [--tier NAME]` show what is available, and
+`agops plan show PLAN [--revision N]` prints one plan's definition. The other task transitions:
+
+```sh
+agops task block PLAN TASK --reason "Waiting for VPC peering"  # owner stops; task is blocked
+agops task unblock PLAN TASK --resolution "Peering approved"   # task is ready again
+agops task release PLAN TASK                                   # owner gives the claim back
+```
+
+Set `AGOPS_ACTOR` to name the agent and `AGOPS_SESSION` to pin a session id explicitly;
+`agops session` prints a new id (`--value` prints the id only). `AGOPS_MODEL`, when set, takes
+precedence over `--model` for `brief` and `run`. Per-session records, such as the declared
+model, are kept in `~/.local/state/agops/sessions`; `AGOPS_STATE_DIR` moves the parent directory.
+
+`agops search "words"` ranks the knowledge entries, archives included, by how often the words
+appear in them. `agops migrate-remember PATH --project ID` imports the Markdown files of an old
+`.remember` journal into one `archive` entry of that project. A second import supersedes the
+first.
 
 Tasks carry a `tier` (default `standard`); `memory/policy/tiers.yaml` maps model ids to tiers.
 Frontier models plan and review, cheaper models execute, and the hub rejects claims that cross
 tiers. The shipped patterns lead with a wildcard so they also match the prefixed ids that provider
 routes report (Bedrock sends `us.anthropic.claude-opus-5[1m]`); a model no pattern matches resolves
-to the `unknown` tier, which rejects every claim, and the brief says so in its header. See
+to the `unknown` tier, which rejects every claim, and the brief says so in its header.
+`agops policy show` prints the tiers and the tier of the current session; `agops policy validate`
+only checks the file. A human can bypass the tier check with
+`agops task claim PLAN TASK --allow-tier-mismatch`. It asks for the task id, and it is refused under
+`agops run`, in non-interactive terminals, and through MCP. See
 [docs/protocol.md](docs/protocol.md#execution-tiers).
 
 To launch a tool with a task already claimed and the lease renewed while it runs, use the managed
@@ -198,30 +224,29 @@ projects, activity, and docs are a read-only mirror, so change knowledge with
 `agops knowledge add` rather than in the vault. Personal notes (the "My notes" section) are
 preserved in every note.
 
-A plan note reads top-down: the goal's lead sentences (the full goal folds below), links to its
-docs and projects, what needs you (a pending revision lists the tasks it adds, removes, or
-changes), then the tasks once each, grouped by `phase` or else by where they stand (in progress,
-blocked, next, waiting on other tasks, done). Each task is a folded Obsidian callout coloured by
-status (`todo` open, `tip` in progress, `failure` blocked, `done` complete); unfold it for the
-gist, then the rest of its text, the done-when line, project, tier and dependencies, and the
-latest checkpoint. Below come acceptance criteria, related knowledge (entries
-linked to the plan or mentioning it), and the plan-level details. The plan definition itself
-lives in a hidden file, `plans/.definitions/<id>.yaml`; edit that, not the note. Agops owns these
-plain frontmatter keys and rewrites them on every export: plan notes `tags`, `status`, `health`,
-`workspace`, `progress`, `last_activity`, `topics`; knowledge notes `tags`, `kind`, `scope`,
-`updated`, `plan`, `project`, `topics`. Your own keys and tags (such as `keep: true`) are kept;
-`topic/*` tags are agops-owned. Inside an Obsidian vault the `plan` property is a full-path link,
-so a mirrored doc with the same file name never captures it. Ids, revisions and hashes are in `.agops-notes.json`. Notes from the older layout (an
-`agops_*` frontmatter and a YAML block in the note) are converted on the next sync; an unsynced
-edit in the old block moves to the `.yaml` file.
+A plan note reads top-down: the goal's lead sentences (the full goal folds below), links to its docs
+and projects, what needs you (a pending revision lists the tasks it adds, removes, or changes), then
+the tasks once each, grouped by `phase` or else by where they stand (in progress, blocked, next,
+waiting on other tasks, done). Each task is a folded Obsidian callout coloured by status (`todo`
+open, `tip` in progress, `failure` blocked, `done` complete); unfold it for the gist, then the rest
+of its text, the done-when line, project, tier and dependencies, and the latest checkpoint. Below
+come acceptance criteria, related knowledge (entries linked to the plan or mentioning it), and the
+plan-level details. The plan definition itself lives in a hidden file,
+`plans/.definitions/<id>.yaml`; edit that, not the note. Agops owns these plain frontmatter keys and
+rewrites them on every export: plan notes `tags`, `status`, `health`, `workspace`, `progress`,
+`last_activity`, `topics`; knowledge notes `tags`, `kind`, `scope`, `updated`, `plan`, `project`,
+`topics`. Your own keys and tags (such as `keep: true`) are kept; `topic/*` tags are agops-owned.
+Inside an Obsidian vault the `plan` property is a full-path link, so a mirrored doc with the same
+file name never captures it. Ids, revisions and hashes are in `.agops-notes.json`. Notes from the
+older layout (an `agops_*` frontmatter and a YAML block in the note) are converted on the next sync;
+an unsynced edit in the old block moves to the `.yaml` file.
 
-Agops exports after successful hub changes and after `agops sync`. Editing a plan definition is safe but
-intentional: `agops notes sync` validates `plans/.definitions/<id>.yaml` and creates a new
+Agops exports after successful hub changes and after `agops sync`. Editing a plan definition is safe
+but intentional: `agops notes sync` validates `plans/.definitions/<id>.yaml` and creates a new
 **unapproved** plan revision. Personal notes and your own frontmatter are retained and never
-imported. Finished
-or cancelled plans are history only. If agops and a note changed the same definition, resolve it
-deliberately: `agops notes resolve PLAN --take notes|agops` (type the plan id, or add `--yes`).
-`agops notes disconnect` only forgets the folder; it never deletes notes.
+imported. Finished or cancelled plans are history only. If agops and a note changed the same
+definition, resolve it deliberately: `agops notes resolve PLAN --take notes|agops` (type the plan
+id, or add `--yes`). `agops notes disconnect` only forgets the folder; it never deletes notes.
 
 The sidecar is bound to its hub, so a folder belonging to another profile cannot be connected by
 mistake. A notes write failure is an additive `notes_warning`: the hub event still succeeds and the
@@ -232,34 +257,34 @@ definition.
 `Home.md` is the overview: a one-line tally; what needs you (pending approvals, blocked tasks,
 stalled plans, drafts to approve or cancel); one table of open plans per workspace with status,
 progress, the next task, and last activity; the last 7 days of events; the newest knowledge; and
-recently completed work. Every plan note and
-`Plans.md` carry a computed `health` (`live`, `waiting`, `blocked`, `stalled` after 7 idle
-days, `done`, `cancelled`, or `draft`), plus its workspace and progress, so the vault
-sorts and filters instead of just listing. `agops.base` is an Obsidian Bases file with ready-made
-views (open plans including drafts, stalled, by workspace, recently completed, knowledge,
-decisions and preferences, plan-linked facts) that filter on the `agops/plan` and
-`agops/knowledge` tags; agops writes it once and never overwrites your edits (an untouched earlier
-default is upgraded; a copy that still uses the old `agops_*` properties is kept as
-`agops.old.base` and replaced by the new default).
+recently completed work. Every plan note and `Plans.md` carry a computed `health` (`live`,
+`waiting`, `blocked`, `stalled` after 7 idle days, `done`, `cancelled`, or `draft`), plus its
+workspace and progress, so the vault sorts and filters instead of just listing. `agops.base` is an
+Obsidian Bases file with ready-made views (open plans including drafts, stalled, by workspace,
+recently completed, knowledge, decisions and preferences, plan-linked facts) that filter on the
+`agops/plan` and `agops/knowledge` tags; agops writes it once and never overwrites your edits (an
+untouched earlier default is upgraded; a copy that still uses the old `agops_*` properties is kept
+as `agops.old.base` and replaced by the new default).
 
-`notes.yaml` in the folder is yours: agops writes a commented template once and only reads it
-after that. `docs:` lists folders whose Markdown and images are copied read-only into
-`docs/<folder>/` on every sync, so vault search and plan notes reach long-form documents. HTML
-files are mirrored too, as pages: an agent's web page with diagrams sits beside the docs, keeps its
-name, takes its title from `<title>`, and opens in the browser from Obsidian. A plan links the
-docs and pages named `<plan-id>.*` or `<plan-id>-*` and any whose path its definition mentions,
-on separate `Docs:` and `Pages:` lines; `Home.md` lists the newest pages. Each Markdown copy carries its folder in its name (`workstreams/x.md` becomes
-`workstreams/x (workstreams).md`, with links between the docs rewritten), so a doc named after a
-plan never captures a `[[plan-id]]` link. Dot files, symlinks, and files matching credential
-patterns are skipped, and a copy edited in the vault is kept and no longer refreshed. `topics:` maps a topic name to project-id
-globs and keywords; a note gets `topic/<name>` when one of its projects matches or its title or
-key has a keyword, and `Knowledge.md` groups entries by topic (untagged ones by scope). Files an
-earlier layout generated (`views/*.base` on `agops_*` properties, `projects/*.md` notes with
-`agops_type: project`) are removed on sync; a project note with personal notes is kept and
-reported. `agops notes review` prints a read-only JSON triage
-report - stale or blocked plans and which knowledge entries are safe to retire - for a human or the
-`agops-notes` skill to act on. Add `keep: true` to a knowledge note's frontmatter to mark it kept;
-`agops notes review` then reports it as `keep` instead of flagging it again.
+`notes.yaml` in the folder is yours: agops writes a commented template once and only reads it after
+that. `docs:` lists folders whose Markdown and images are copied read-only into `docs/<folder>/` on
+every sync, so vault search and plan notes reach long-form documents. HTML files are mirrored too,
+as pages: an agent's web page with diagrams sits beside the docs, keeps its name, takes its title
+from `<title>`, and opens in the browser from Obsidian. A plan links the docs and pages named
+`<plan-id>.*` or `<plan-id>-*` and any whose path its definition mentions, on separate `Docs:` and
+`Pages:` lines; `Home.md` lists the newest pages. Each Markdown copy carries its folder in its name
+(`workstreams/x.md` becomes `workstreams/x (workstreams).md`, with links between the docs
+rewritten), so a doc named after a plan never captures a `[[plan-id]]` link. Dot files, symlinks,
+and files matching credential patterns are skipped, and a copy edited in the vault is kept and no
+longer refreshed. `topics:` maps a topic name to project-id globs and keywords; a note gets
+`topic/<name>` when one of its projects matches or its title or key has a keyword, and
+`Knowledge.md` groups entries by topic (untagged ones by scope). Files an earlier layout generated
+(`views/*.base` on `agops_*` properties, `projects/*.md` notes with `agops_type: project`) are
+removed on sync; a project note with personal notes is kept and reported. `agops notes review`
+prints a read-only JSON triage report - stale or blocked plans and which knowledge entries are safe
+to retire - for a human or the `agops-notes` skill to act on. Add `keep: true` to a knowledge note's
+frontmatter to mark it kept; `agops notes review` then reports it as `keep` instead of flagging it
+again.
 
 ## Skills
 

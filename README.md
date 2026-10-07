@@ -8,6 +8,8 @@ It does not call a model API and does not depend on a particular subscription. G
 store; a small CLI provides safe state transitions, and a stdio MCP server exposes the same
 operations to clients that support MCP.
 
+![Agents reach agops through MCP or the CLI. agops commits each event to the hub Git repository and pushes to an optional remote. agops setup writes the instruction files, and the notes bridge exports to a notes folder.](docs/architecture.svg)
+
 ## Install
 
 One command on a machine that already runs Claude Code and/or Codex CLI:
@@ -151,6 +153,8 @@ agops task claim PLAN TASK --cwd "$PWD"
 agops task checkpoint PLAN TASK --summary "Implemented parser" --evidence "pytest: 12 passed"
 agops task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12 passed"
 ```
+
+![Task life cycle: a human approves a draft plan; a claim checks the tier and takes a 60-minute lease; checkpoints renew it; completion needs evidence; block, unblock, release and lease expiry return a task to ready.](docs/task-lifecycle.svg)
 
 `agops plan list` and `agops task ready [--tier NAME]` show what is available, and
 `agops plan show PLAN [--revision N]` prints one plan's definition. The other task transitions:

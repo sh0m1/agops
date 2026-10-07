@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" width="1000" height="500" role="img" aria-labelledby="title desc">
+  <title id="title">Agents talk to agops; agops writes the hub</title>
+  <desc id="desc">Agents reach agops through MCP or the CLI. agops commits each event to the hub Git repository under a lock and pushes to an optional remote. agops setup writes the managed instruction block, which agents read at session start. The notes bridge exports to a notes folder, which also mirrors docs folders.</desc>
+  <style>
+    svg { --bg:#FFFFFF; --box:#F2F5F8; --line:#D3DCE4; --ink:#13202B; --muted:#56687A; --accent:#0B6E80; --soft:#DCEEF1; --human:#A84D17; }
+    @media (prefers-color-scheme: dark) {
+      svg { --bg:#152029; --box:#0E151B; --line:#2A3A46; --ink:#E4ECF2; --muted:#97A8B7; --accent:#5CC3D4; --soft:#163339; --human:#F2A266; }
+    }
+    text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .bg { fill: var(--bg); }
+    .t { fill: var(--ink); font-size: 15px; font-weight: 600; }
+    .r { fill: var(--ink); font-size: 13.5px; font-weight: 500; }
+    .s { fill: var(--muted); font-size: 12px; }
+    .m { fill: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+    .g { fill: var(--accent); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+    .lab { fill: var(--muted); font-size: 11.5px; }
+    .lab.b { font-weight: 600; }
+    .lab.h { fill: var(--human); font-weight: 600; }
+    .box { fill: var(--box); stroke: var(--line); stroke-width: 1.3; }
+    .box.acc { stroke: var(--accent); stroke-width: 1.8; }
+    .pill { fill: var(--soft); }
+    .e { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+    .e.acc { stroke: var(--accent); }
+    .e.hum { stroke: var(--human); }
+    .dash { stroke-dasharray: 5 4; }
+    .ah { fill: var(--muted); } .aha { fill: var(--accent); } .ahh { fill: var(--human); }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="aha" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="ahh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ahh" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+  <rect class="bg" width="1000" height="500" rx="12"/>
+
+  <text class="g" x="30" y="32">AGENTS</text>
+  <rect class="box" x="30" y="45" width="200" height="56" rx="8"/>
+  <text class="t" x="130" y="70" text-anchor="middle">Claude Code</text><text class="s" x="130" y="89" text-anchor="middle">MCP tools + hook</text>
+  <rect class="box" x="30" y="120" width="200" height="56" rx="8"/>
+  <text class="t" x="130" y="145" text-anchor="middle">Codex CLI</text><text class="s" x="130" y="164" text-anchor="middle">MCP tools + hook</text>
+  <rect class="box" x="30" y="195" width="200" height="56" rx="8"/>
+  <text class="t" x="130" y="220" text-anchor="middle" style="font-size:14px">Cursor · Gemini · Copilot</text><text class="s" x="130" y="239" text-anchor="middle">CLI + repository adapters</text>
+
+  <text class="g" x="340" y="32">AGOPS</text>
+  <rect class="box acc" x="340" y="45" width="280" height="206" rx="10"/>
+  <rect class="pill" x="356" y="60" width="248" height="38" rx="6"/><text class="r" x="370" y="84">MCP server · hub_* tools</text>
+  <rect class="pill" x="356" y="106" width="248" height="38" rx="6"/><text class="r" x="370" y="130">CLI · agops brief / task / plan</text>
+  <rect class="pill" x="356" y="152" width="248" height="38" rx="6"/><text class="r" x="370" y="176">Hook · agops-hook.mjs</text>
+  <rect class="pill" x="356" y="198" width="248" height="38" rx="6"/><text class="r" x="370" y="222">Lock · commit · push · replay</text>
+
+  <text class="g" x="740" y="32">HUB · GIT REPOSITORY</text>
+  <rect class="box" x="740" y="45" width="240" height="206" rx="10"/>
+  <text class="m" x="758" y="80">memory/knowledge/</text>
+  <text class="m" x="758" y="104">memory/plans/</text>
+  <text class="m" x="758" y="128">memory/projects/</text>
+  <text class="m" x="758" y="152">memory/events/</text>
+  <text class="m" x="758" y="176">memory/policy/tiers.yaml</text>
+  <text class="s" x="758" y="212">one commit per event</text>
+  <text class="s" x="758" y="232">local by default</text>
+  <rect class="box dash" x="740" y="300" width="240" height="56" rx="8"/>
+  <text class="t" x="860" y="324" text-anchor="middle">Optional remote</text><text class="s" x="860" y="343" text-anchor="middle">the push is the compare-and-swap</text>
+
+  <rect class="box" x="30" y="400" width="270" height="72" rx="8"/>
+  <text class="t" x="165" y="428" text-anchor="middle">CLAUDE.md · AGENTS.md</text><text class="s" x="165" y="450" text-anchor="middle">managed block from global preferences</text>
+  <rect class="box acc" x="380" y="400" width="300" height="72" rx="8"/>
+  <text class="t" x="530" y="428" text-anchor="middle">Notes folder</text><text class="s" x="530" y="450" text-anchor="middle">Obsidian, Logseq or any Markdown folder</text>
+  <rect class="box" x="740" y="400" width="240" height="72" rx="8"/>
+  <text class="t" x="860" y="428" text-anchor="middle">Docs folders</text><text class="s" x="860" y="450" text-anchor="middle">listed under docs: in notes.yaml</text>
+
+  <path class="e" d="M230 73 H338" marker-end="url(#ah)"/><text class="lab" x="285" y="66" text-anchor="middle">MCP</text>
+  <path class="e" d="M230 148 H338" marker-end="url(#ah)"/><text class="lab" x="285" y="141" text-anchor="middle">MCP</text>
+  <path class="e" d="M230 223 H338" marker-end="url(#ah)"/><text class="lab" x="285" y="216" text-anchor="middle">CLI</text>
+  <path class="e acc" d="M620 148 H738" marker-end="url(#aha)"/><text class="lab" x="680" y="138" text-anchor="middle">commit</text><text class="lab" x="680" y="166" text-anchor="middle">under lock</text>
+  <path class="e dash" d="M860 251 V298" marker-end="url(#ah)"/><text class="lab" x="870" y="280">push</text>
+  <path class="e acc" d="M480 253 V398" marker-start="url(#aha)" marker-end="url(#aha)"/>
+  <text class="lab b" x="492" y="314">notes bridge</text><text class="lab" x="492" y="332">export after each change</text><text class="lab" x="492" y="350">plan .yaml edit → new draft</text>
+  <path class="e" d="M740 436 H682" marker-end="url(#ah)"/><text class="lab" x="711" y="428" text-anchor="middle">mirror</text>
+  <path class="e" d="M130 400 V253" marker-end="url(#ah)"/><text class="lab" x="140" y="330">read at session start</text>
+  <path class="e hum" d="M362 251 L292 398" marker-end="url(#ahh)"/><text class="lab h" x="326" y="300" text-anchor="end">agops setup</text>
+</svg>

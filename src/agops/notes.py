@@ -37,6 +37,15 @@ from .state import (
     utc_now,
     validate_plan,
 )
+from .todos import (
+    TodoItem,
+    TodoList,
+    display_text,
+    file_link,
+    heading_link,
+    load_todos,
+    normalize_settings,
+)
 
 if TYPE_CHECKING:
     from .hub import Hub
@@ -433,6 +442,15 @@ docs: []
 #       projects: ["*-nlb", "*-vpc"]
 #       keywords: [nlb, vpc, vpn]
 topics: {}
+#
+# todos: one Markdown todo list in this vault, read on every sync and never written. Plan
+# notes list the open items that link the plan ([[plan-id]] on the item, a parent item, a
+# group line or a heading), Home shows a summary, and `agops brief` shows a few. The path is
+# relative to the vault root (the folder with .obsidian).
+#   todos:
+#     file: Todo/ALL.md
+#     inbox: Inbox                        # the heading that new items go under
+#     sweep_exclude: [Meetings/Zoom/**]   # notes the agops-notes skill does not sweep
 """
 DOCS_DIR = "docs"
 DOC_SUFFIXES = frozenset({".md", ".html", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"})
@@ -535,14 +553,22 @@ def _link(text: str, from_note: str, to_note: str) -> str:
     return f"[{text}]({_href(from_note, to_note)})"
 
 
-def _vault_prefix(target: Path) -> str | None:
-    """The notes folder's path inside its Obsidian vault ("" at the root), None outside one."""
+def _vault_root(target: Path) -> Path | None:
+    """The Obsidian vault (the nearest folder with .obsidian) that holds the notes folder."""
     resolved = target.resolve()
     for candidate in (resolved, *resolved.parents):
         if (candidate / ".obsidian").is_dir():
-            relative = resolved.relative_to(candidate).as_posix()
-            return "" if relative == "." else f"{relative}/"
+            return candidate
     return None
+
+
+def _vault_prefix(target: Path) -> str | None:
+    """The notes folder's path inside its Obsidian vault ("" at the root), None outside one."""
+    root = _vault_root(target)
+    if root is None:
+        return None
+    relative = target.resolve().relative_to(root).as_posix()
+    return "" if relative == "." else f"{relative}/"
 
 
 def _doc_name(inner: str, folder: str) -> str:
@@ -1123,12 +1149,16 @@ def _plan_overview(
     }
 
 
-def _load_settings(target: Path) -> tuple[dict[str, Any], list[str]]:
-    """`notes.yaml`: docs folders to mirror and topic rules. Written once, then user-owned."""
-    settings: dict[str, Any] = {"docs": [], "topics": {}}
+def _load_settings(target: Path, create: bool = True) -> tuple[dict[str, Any], list[str]]:
+    """`notes.yaml`: docs folders, topic rules and the todo list. Written once, then user-owned.
+
+    `create=False` reads only, for callers such as the brief that must not touch the vault.
+    """
+    settings: dict[str, Any] = {"docs": [], "topics": {}, "todos": None}
     path = target / SETTINGS_FILE
     if not path.exists():
-        _atomic_write(path, NOTES_SETTINGS)
+        if create:
+            _atomic_write(path, NOTES_SETTINGS)
         return settings, []
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -1142,6 +1172,8 @@ def _load_settings(target: Path) -> tuple[dict[str, Any], list[str]]:
         settings["docs"] = docs
     else:
         warnings.append(f"{SETTINGS_FILE}: docs must be a list of folder paths")
+    settings["todos"], todo_warnings = normalize_settings(data.get("todos"))
+    warnings.extend(todo_warnings)
     topics = data.get("topics") or {}
     if not isinstance(topics, dict):
         return settings, [*warnings, f"{SETTINGS_FILE}: topics must be a mapping"]
@@ -1167,6 +1199,9 @@ class _Context:
     entries: list[dict[str, Any]] = field(default_factory=list)
     plans: dict[str, dict[str, Any]] = field(default_factory=dict)
     topics: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    todos: TodoList | None = None
+    todo_inbox: str = "Inbox"
+    todo_dates: list[str] = field(default_factory=list)
 
     def plan_docs(self, plan: dict[str, Any]) -> list[dict[str, Any]]:
         """Docs named after the plan (`<id>.md`, `<id>-*.md`) or mentioned by path in it."""
@@ -1234,6 +1269,111 @@ def _suffix(value: Any) -> str:
     return f" — {_short(str(value), 140)}" if value else ""
 
 
+TODO_PLAN_LIMIT = 25
+
+
+def _todo_safe(item: TodoItem) -> bool:
+    return not any(pattern.search(item.text) for pattern in SECRET_PATTERNS)
+
+
+def _open_parent(todos: TodoList, item: TodoItem) -> int | None:
+    """The nearest ancestor that is still open: a done parent does not hold its children."""
+    parent = item.parent
+    while parent is not None and not todos.items[parent].open:
+        parent = todos.items[parent].parent
+    return parent
+
+
+def _todo_tree(
+    todos: TodoList, entries: list[int], dates: list[str]
+) -> list[tuple[int, int]]:
+    """(index, depth) in display order: top items newest first, children under their parent."""
+    listed = set(entries)
+    children: dict[int, list[int]] = {}
+    roots: list[int] = []
+    for index in entries:
+        parent = _open_parent(todos, todos.items[index])
+        if parent in listed:
+            children.setdefault(parent, []).append(index)
+        else:
+            roots.append(index)
+    roots.sort(key=lambda index: dates[index], reverse=True)  # stable: file order on ties
+    ordered: list[tuple[int, int]] = []
+
+    def walk(index: int, depth: int) -> None:
+        ordered.append((index, depth))
+        for child in children.get(index, []):
+            walk(child, depth + 1)
+
+    for root in roots:
+        walk(root, 0)
+    return ordered
+
+
+def _todo_section(context: _Context, plan_id: str, finished: bool) -> list[str]:
+    """The plan note's view of the user's todo file: plain bullets, never checkboxes."""
+    todos = context.todos
+    if todos is None:
+        return []
+    linked = todos.for_plan(plan_id, state=None)
+    entries = [
+        index
+        for index, item in enumerate(todos.items)
+        if item.open and plan_id in item.plans and _todo_safe(item)
+    ]
+    if not entries:
+        return []
+    done = sum(item.state == "done" for item in linked)
+    lines = ["", f"## Todos ({len(entries)} open · {done} done)", ""]
+    ordered = _todo_tree(todos, entries, context.todo_dates)
+    for index, depth in ordered[:TODO_PLAN_LIMIT]:
+        item = todos.items[index]
+        text = _escape_html(_short(display_text(item, plan_id), 200))
+        if depth:
+            lines.append("\t" * depth + f"- {text}")
+            continue
+        if item.parent is not None:
+            crumb = _short(display_text(todos.items[item.parent], plan_id), 60)
+            text = f"{_escape_html(crumb)} › {text}"
+        day = context.todo_dates[index]
+        lines.append(f"- {day} · {text} · {heading_link(todos.file, item)}")
+    if len(ordered) > TODO_PLAN_LIMIT:
+        lines.append(f"- _{len(ordered) - TODO_PLAN_LIMIT} more in {file_link(todos.file)}_")
+    lines.append("")
+    if finished:
+        lines.append(
+            f"_This plan is finished; tick or re-link these items in {file_link(todos.file)}._"
+        )
+    lines.append(
+        f"_Open items in {file_link(todos.file)} that link this plan, a parent item or their "
+        "heading, newest first. Tick them there; this list refreshes on `agops notes sync`._"
+    )
+    return lines
+
+
+def _todo_home(context: _Context) -> list[str]:
+    todos = context.todos
+    if todos is None:
+        return []
+    counts = todos.counts()
+    inbox = file_link(todos.file, context.todo_inbox, context.todo_inbox)
+    lines = [
+        "",
+        "## Todos",
+        "",
+        f"{file_link(todos.file)} · {counts['open']} open · {counts['inbox']} in {inbox} · "
+        f"{counts['linked']} linked to plans · {counts['done']} done",
+    ]
+    for plan in context.plans.values():
+        if plan["status"] not in {"completed", "cancelled"}:
+            continue
+        stale = len(todos.for_plan(plan["id"]))
+        if stale:
+            link = _link(plan["title"], "Home.md", plan["note_path"])
+            lines.append(f"- {_count(stale, 'open todo')} link the {plan['status']} plan {link}")
+    return lines
+
+
 class NotesBridge:
     def __init__(self, hub: Hub) -> None:
         self.hub = hub
@@ -1295,6 +1435,48 @@ class NotesBridge:
         target = str(entry.pop("notes_target"))
         save_profiles(profiles)
         return {"disconnected": target, "profile": self.profile}
+
+    def _load_todos(
+        self, target: Path, settings: dict[str, Any], plan_ids: list[str]
+    ) -> tuple[TodoList | None, list[str]]:
+        """The configured todo file, or None with a warning. Never raises for a bad file."""
+        todo_settings = settings.get("todos")
+        if todo_settings is None:
+            return None, []
+        file = todo_settings["file"]
+        try:
+            root = _vault_root(target)
+            if root is None:
+                return None, ["todos: the notes folder is not inside an Obsidian vault"]
+            return load_todos(root, todo_settings, plan_ids, target), []
+        except FileNotFoundError:
+            return None, [f"todos: {file} not found"]
+        except (OSError, ValueError) as exc:
+            detail = str(exc).removeprefix("todos: ")
+            return None, [f"todos: cannot read {file}: {detail}"]
+
+    def todo_first_seen(self) -> dict[str, str]:
+        """The first-seen dates the last render kept, read without writing anything."""
+        target = self.target()
+        if target is None or not (target / SIDECAR).is_file():
+            return {}
+        try:
+            data = json.loads((target / SIDECAR).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        value = (data.get("todos") or {}).get("first_seen") if isinstance(data, dict) else None
+        return value if isinstance(value, dict) else {}
+
+    def todo_list(self) -> tuple[TodoList | None, list[str]]:
+        """Read-only access for the brief: never writes notes.yaml or any note."""
+        target = self.target()
+        if target is None:
+            return None, []
+        settings, warnings = _load_settings(target, create=False)
+        todo_warnings = [warning for warning in warnings if "todos" in warning]
+        plan_ids = [summary["id"] for summary in self.hub.list_plans()]
+        todos, load_warnings = self._load_todos(target, settings, plan_ids)
+        return todos, [*todo_warnings, *load_warnings]
 
     def _sidecar(self, target: Path) -> dict[str, Any]:
         path = target / SIDECAR
@@ -1469,6 +1651,7 @@ class NotesBridge:
         for item in overview["blocked"]:
             needs.append(f"- Blocked: `{item['task']}` — {_short(item['reason'], 160)}")
         lines.extend(needs or ["_Nothing._"])
+        lines.extend(_todo_section(context, str(plan["id"]), finished))
 
         lines.extend(["", f"## Tasks ({len(done_ids)}/{len(tasks)} done)"])
         if any(task.get("phase") for task in tasks):
@@ -1665,6 +1848,7 @@ class NotesBridge:
                 f"{plan['latest_revision']} · {_count(plan['tasks_total'], 'task')}"
             )
         lines.extend(needs or ["_Nothing._"])
+        lines.extend(_todo_home(context))
 
         lines.extend(["", "## Plans", ""])
         open_plans = active + drafts
@@ -2427,7 +2611,7 @@ class NotesBridge:
                     value = "clean"
             output.append({"id": plan_id, "status": value, "plan_status": _status(plan_state)})
         overall = "clean" if all(item["status"] == "clean" for item in output) else "attention"
-        return {
+        result: dict[str, Any] = {
             "connected": True,
             "target": str(target),
             "status": overall,
@@ -2437,6 +2621,23 @@ class NotesBridge:
                 "projects": len(self._projects()),
             },
         }
+        settings, _ = _load_settings(target, create=False)
+        if settings["todos"] is not None:
+            todos, problems = self._load_todos(
+                target, settings, [summary["id"] for summary in self.hub.list_plans()]
+            )
+            if todos is None:
+                result["todos"] = {"file": settings["todos"]["file"], "error": problems[0]}
+            else:
+                counts = todos.counts()
+                seen = (sidecar.get("todos") or {}).get("sha256")
+                result["todos"] = {
+                    "file": todos.file,
+                    "open": counts["open"],
+                    "inbox": counts["inbox"],
+                    "stale": seen != todos.sha256,
+                }
+        return result
 
     def _safe_to_move(
         self,
@@ -2494,6 +2695,15 @@ class NotesBridge:
             overview["docs"] = context.plan_docs(plan)
             context.plans[plan_id] = overview
             loaded.append((plan, plan_state, execution_plan, overview))
+        context.todos, todo_warnings = self._load_todos(target, settings, list(context.plans))
+        warnings.extend(todo_warnings)
+        first_seen: dict[str, str] = {}
+        if context.todos is not None:
+            known = (sidecar.get("todos") or {}).get("first_seen") or {}
+            first_seen = context.todos.first_seen(known, now.date().isoformat())
+            context.todo_dates = context.todos.dates(first_seen, now.date().isoformat())
+        if settings["todos"] is not None:
+            context.todo_inbox = settings["todos"]["inbox"]
         plan_list = list(state.plans)
         task_plans = {
             str(task["id"]): str(plan["id"]) for plan, *_ in loaded for task in plan["tasks"]
@@ -2584,6 +2794,17 @@ class NotesBridge:
         mirrored, mirror_warnings = self._mirror(target, sidecar, state, projects, context, events)
         mirrored["docs"] = len(context.docs)
         warnings.extend(mirror_warnings)
+        if context.todos is not None:
+            # Counts and a hash only: the todo text stays in the user's file.
+            sidecar["todos"] = {
+                "file": context.todos.file,
+                "sha256": context.todos.sha256,
+                **context.todos.counts(),
+                # Item text hashes and dates only, for "newest first" without a source date.
+                "first_seen": first_seen,
+            }
+        else:
+            sidecar.pop("todos", None)
         self._write_sidecar(target, sidecar)
         return {
             "connected": True,
@@ -2761,7 +2982,7 @@ class NotesBridge:
                     "reason": reason,
                 }
             )
-        return {
+        report: dict[str, Any] = {
             "as_of": now.isoformat().replace("+00:00", "Z"),
             "stale_days": STALE_DAYS,
             "counts": {
@@ -2772,4 +2993,65 @@ class NotesBridge:
             },
             "plans": plans_out,
             "knowledge": knowledge_out,
+        }
+        todo_report = self._todo_review(target, state)
+        if todo_report is not None:
+            report["todos"] = todo_report
+        return report
+
+    def _todo_review(self, target: Path | None, state: State) -> dict[str, Any] | None:
+        """Inbox lines to triage and open todos that link a finished plan."""
+        if target is None or not target.is_dir():
+            return None
+        settings, _ = _load_settings(target, create=False)
+        if settings["todos"] is None:
+            return None
+        plan_ids = [summary["id"] for summary in self.hub.list_plans()]
+        todos, problems = self._load_todos(target, settings, plan_ids)
+        base = {
+            "file": settings["todos"]["file"],
+            "inbox_heading": settings["todos"]["inbox"],
+            "sweep_exclude": settings["todos"]["sweep_exclude"],
+        }
+        if todos is None:
+            return {**base, "error": problems[0]}
+        finished = {
+            plan_id: _status(plan_state)
+            for plan_id, plan_state in state.plans.items()
+            if _status(plan_state) in {"completed", "cancelled"}
+        }
+        dates = todos.dates(self.todo_first_seen(), utc_now().date().isoformat())
+        open_items = [item for item in todos.items if item.open and _todo_safe(item)]
+        inbox = sorted(
+            (
+                {
+                    "date": dates[index],
+                    "line": item.line,
+                    "text": item.text,
+                    "plans": list(item.plans),
+                    "links": list(item.links),
+                }
+                for index, item in enumerate(todos.items)
+                if item.open and item.in_inbox and _todo_safe(item)
+            ),
+            key=lambda entry: entry["date"],
+            reverse=True,
+        )
+        stale = [
+            {
+                "line": item.line,
+                "text": item.text,
+                "plan": plan_id,
+                "plan_status": finished[plan_id],
+            }
+            for item in open_items
+            for plan_id in item.plans
+            if plan_id in finished
+        ]
+        return {
+            **base,
+            "counts": todos.counts(),
+            "inbox": inbox[:50],
+            "linked_to_finished": stale,
+            "unlinked_open": sum(not item.plans for item in open_items),
         }

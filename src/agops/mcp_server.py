@@ -27,7 +27,8 @@ def hub() -> Hub:
 
 @mcp.tool()
 def hub_get_brief(cwd: str = ".", model: str | None = None) -> str:
-    """Get bounded context, active plans, and the tasks this session's tier may claim.
+    """Get bounded context, active plans, the tasks this session's tier may claim, and the
+    user's open todos that link plans (when the notes folder names a todo file).
 
     Pass your current model id (for example claude-sonnet-5) so the hub can record the
     session's tier; call again if the model changes.

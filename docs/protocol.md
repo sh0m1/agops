@@ -68,7 +68,7 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
 `todos.file` in `notes.yaml` names one user-owned Markdown todo list inside the same vault. It
 is read on each render, `notes status`, `notes review`, and `brief`, and never written, imported,
 or stored: the sidecar records only its counts, its sha256, and first-seen dates keyed by
-item-text hashes for items whose source link has no date. The path must be vault-relative, end
+item-text hashes for items with no date from their source link, parent, or heading. The path must be vault-relative, end
 in `.md`, stay inside the vault, not be a symlink, and not lie inside the notes folder. Plan notes
 show open items linked to the plan by `[[plan-id]]` (inherited from headings, group lines and
 parent items) as plain bullets, newest first; the brief shows at most 10 items that link open

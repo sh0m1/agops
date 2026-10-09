@@ -290,13 +290,31 @@ to retire - for a human or the `agops-notes` skill to act on. Add `keep: true` t
 frontmatter to mark it kept; `agops notes review` then reports it as `keep` instead of flagging it
 again.
 
+`todos:` names one Markdown todo list in the vault, for example `todos: {file: Todo/ALL.md}` (the
+path is relative to the folder with `.obsidian`). It is the only file outside the notes folder
+that agops reads, and agops never writes it or stores its text: the sidecar keeps only counts, a
+hash, and first-seen dates keyed by hashes of the item text. An item links a plan with a bare wikilink such as `[[network-isolation]]`, and a link on a
+heading, a tag-only group line (`#egress #stockholm`), a label line or a parent item applies to
+the items below it; the nearest link wins. Each item has a date: the first date in its source
+link (a dated meeting note or a `Team weekly#2026-10-05` section), else its parent's, else its
+heading's, else the day agops first saw it. Each plan note then gets a `## Todos` section after
+"Needs you" with the open items that link it, newest first with their dates, as plain bullets
+with a link back to their heading (never checkboxes, so you tick only in the todo file). `Home.md` shows the counts, `agops notes
+status` reports `todos.stale` when the file changed after the last render, `agops notes review`
+lists the Inbox (`inbox:`, default `Inbox`) and open items that link finished plans, and
+`agops brief` lists up to 10 open items that link open plans (the current project's plans
+first, then newest first), read live and labelled as the user's data. The section refreshes on each hub change and on `agops notes sync`. An unreadable
+or invalid file is a warning, never a failed render.
+
 ## Skills
 
 `agops setup` installs the packaged `agops-notes` skill for both Claude Code and Codex
 (`~/.claude/skills/` and `~/.codex/skills/`), so either agent can triage the notes vault - see
 "Notes apps" above. Re-run just this step with `agops skills install`. It never overwrites a
 skill directory you edited by hand (no `managed-by: agops` marker in its `SKILL.md`); such a
-directory is reported "skipped (unmanaged)" instead.
+directory is reported "skipped (unmanaged)" instead. With `todos:` set, the skill also triages
+the todo Inbox and proposes to sweep stray open checkboxes from other notes into it; it changes
+the todo file only after you confirm.
 
 ## Tool access order
 

@@ -59,7 +59,10 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
 - `Knowledge.md`, `Projects.md`, `Activity.md`, and `Docs.md`, generated indexes of the knowledge
   entries by topic or scope, the projects that have plans or knowledge, the current claims,
   blockers, ready tasks and recent events, and the mirrored docs;
-- `docs/<folder>/...`, read-only copies of the folders listed under `docs:` in `notes.yaml`;
+- `docs/<folder>/...`, read-only copies of the folders listed under `docs:` in `notes.yaml`
+  (Markdown docs, HTML pages, and images and `.drawio` files as diagrams). A plan note links
+  those named after its id (the longest matching id wins), those its definition mentions by
+  path, and pages with `<meta name="agops-plan" content="<plan-id>">`;
 - `notes.yaml`, user-owned settings (docs folders, topic rules and an optional todo file),
   written once as a template and never rewritten; and
 - `.agops-notes.json`, a format-versioned semantic baseline, which also records the hash of each
@@ -71,7 +74,8 @@ or stored: the sidecar records only its counts, its sha256, and first-seen dates
 item-text hashes for items with no date from their source link, parent, or heading. The path must be vault-relative, end
 in `.md`, stay inside the vault, not be a symlink, and not lie inside the notes folder. Plan notes
 show open items linked to the plan by `[[plan-id]]` (inherited from headings, group lines and
-parent items) as plain bullets, newest first; the brief shows at most 10 items that link open
+parent items) as plain bullets, newest first, each followed by the pages and diagrams it links,
+re-linked from the plan note; the brief shows at most 10 items that link open
 plans, before knowledge, and reports "Unavailable" instead of failing when the file cannot be read.
 
 Knowledge, project, activity, and docs files are a one-way mirror: the hub (or the docs source

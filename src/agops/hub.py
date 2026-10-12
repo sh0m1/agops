@@ -106,6 +106,8 @@ class Hub:
                     warning = self._refresh_notes()
                     if warning:
                         event["notes_warning"] = warning
+                    if event.get("type") == "knowledge_added":
+                        self._refresh_instructions(event)
                     return event
                 recover_after_rejected_push(self.root)
                 last_error = GitError("Remote changed during operation")
@@ -122,6 +124,21 @@ class Hub:
         if warning:
             result["notes_warning"] = warning
         return result
+
+    def _refresh_instructions(self, event: dict[str, Any]) -> None:
+        """Re-render ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md after a global preference change."""
+        payload = event.get("payload") or {}
+        if payload.get("scope") != "global":  # a retirement or a kind change counts too
+            return
+        from .setup import refresh_instructions  # setup imports Hub
+
+        try:
+            written = refresh_instructions(self)
+        except (OSError, ValueError) as exc:
+            event["instructions_warning"] = f"Instruction refresh failed: {exc}"
+            return
+        if written:
+            event["instructions_refreshed"] = written
 
     def _refresh_notes(self) -> str | None:
         try:

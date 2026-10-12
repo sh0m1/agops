@@ -1,7 +1,8 @@
 """Read one user-owned Markdown todo list (for example an Obsidian `Todo/ALL.md`).
 
 agops never writes the file. Items link plans with wikilinks such as `[[network-isolation]]`;
-a link on a heading, a group line or a parent item applies to the items below it.
+a link on a heading, a group line or a parent item applies to the items below it. An item's own
+links to web pages and diagrams (`.html`, images, `.drawio`) are kept as its pages.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date as Date
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 MAX_TODO_BYTES = 1 << 20
 DEFAULT_INBOX = "Inbox"
@@ -28,11 +30,50 @@ _FENCE = re.compile(r"^[ \t]*(```|~~~)")
 _URL_LINE = re.compile(r"^<?https?://\S+>?$")
 _WIKILINK = re.compile(r"(!?)\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|([^\]]*))?\]\]")
 _MDLINK = re.compile(r"(!?)\[([^\]]*)\]\(<?([^)>\s]+\.md)(?:#[^)>]*)?>?\)")
+_ANYLINK = re.compile(r"(!?)\[([^\]]*)\]\((?:<([^>\n]+)>|([^)\s]+))\)")
+PAGE_SUFFIXES = (".html", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".drawio")
 _URL = re.compile(r"https?://\S+")
 _CODE = re.compile(r"`[^`]*`")
 _TAG = re.compile(r"(?<![\w/&#])#([\w/-]*[^\W\d_][\w/-]*)")
 _ANCHOR_UNSAFE = re.compile(r"[\[\]|#^]")
 _DATE = re.compile(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)")
+
+
+@dataclass(frozen=True)
+class PageLink:
+    """A link on an item to a page or diagram, as written: a path (Markdown) or a name."""
+
+    label: str
+    target: str
+    wiki: bool = False
+
+
+def _is_page(target: str) -> bool:
+    target = target.strip()
+    return "://" not in target and target.lower().endswith(PAGE_SUFFIXES)
+
+
+def _page_links(text: str) -> tuple[PageLink, ...]:
+    """The page and diagram links in the text, in the order they are written."""
+    text = _CODE.sub(lambda match: " " * len(match.group(0)), text)
+    found: list[tuple[int, PageLink]] = []
+    for match in _WIKILINK.finditer(text):
+        if _is_page(match.group(2)):  # embeds too: the plan note links them
+            target = match.group(2).strip()
+            label = (match.group(3) or posixpath.basename(target)).strip()
+            found.append((match.start(), PageLink(label, target, wiki=True)))
+    for match in _ANYLINK.finditer(text):
+        target = unquote(match.group(3) or match.group(4) or "")
+        if _is_page(target):
+            label = match.group(2).strip() or posixpath.basename(target)
+            found.append((match.start(), PageLink(label, target)))
+    return tuple(dict.fromkeys(link for _, link in sorted(found, key=lambda pair: pair[0])))
+
+
+def _page_label(match: re.Match[str]) -> str:
+    """A Markdown page link as its text: the plan note re-links it from its own path."""
+    target = unquote(match.group(3) or match.group(4) or "")
+    return match.group(2) if _is_page(target) else match.group(0)
 
 
 @dataclass(frozen=True)
@@ -52,6 +93,7 @@ class TodoItem:
     anchor: str | None = None
     date: str | None = None  # from the item's source link, a parent item or a heading
     key: str = ""  # a hash of the normalized text, stable when links or tags change
+    pages: tuple[PageLink, ...] = ()  # the item's own links to pages and diagrams
 
     @property
     def open(self) -> bool:
@@ -140,7 +182,7 @@ def _valid_date(text: str) -> str | None:
 def _source_date(text: str) -> str | None:
     """The first date in a link target or anchor, such as a dated meeting note."""
     for match in _WIKILINK.finditer(text):
-        if not match.group(1):
+        if not match.group(1) and not _is_page(match.group(2)):
             found = _valid_date(match.group(0).split("|", 1)[0])
             if found:
                 return found
@@ -152,7 +194,7 @@ def _source_date(text: str) -> str | None:
 
 
 def _identity(text: str) -> str:
-    text = _MDLINK.sub(r"\2", _WIKILINK.sub(" ", text))
+    text = _MDLINK.sub(r"\2", _WIKILINK.sub(" ", _ANYLINK.sub(_page_label, text)))
     text = _TAG.sub(" ", _URL.sub(" ", text)).replace("→", " ")
     text = re.sub(r"\(\s*\)", " ", text)
     return re.sub(r"\s+", " ", text).strip(" .;:-").casefold()
@@ -293,6 +335,7 @@ def parse_todos(
                 anchor=raw if raw and not _ANCHOR_UNSAFE.search(raw) else None,
                 date=when,
                 key=key,
+                pages=_page_links(body),
             )
         )
         stack.append((width, scope, len(result.items) - 1))
@@ -384,9 +427,23 @@ def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[\[\]|]", " ", text)).strip()
 
 
-def display_text(item: TodoItem, drop_plan: str | None = None) -> str:
-    """The item's text without its link to `drop_plan` (the plan whose note shows it)."""
+def display_text(
+    item: TodoItem, drop_plan: str | None = None, drop_pages: bool = False
+) -> str:
+    """The item's text without its link to `drop_plan` (the plan whose note shows it).
+
+    With `drop_pages`, page and diagram links keep only their text, for a note that lists
+    them itself with links relative to its own path.
+    """
     text = item.text
+    if drop_pages and item.pages:
+
+        def label(match: re.Match[str]) -> str:
+            if not _is_page(match.group(2)):
+                return match.group(0)
+            return (match.group(3) or posixpath.basename(match.group(2))).strip()
+
+        text = _ANYLINK.sub(_page_label, _WIKILINK.sub(label, text))
     if drop_plan is not None:
 
         def strip(match: re.Match[str]) -> str:

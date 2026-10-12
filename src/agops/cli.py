@@ -247,7 +247,11 @@ def dispatch(args: argparse.Namespace) -> Any:
         return profile_report(as_json=args.json)
     if args.command == "adapter":
         tools = [tool.strip() for tool in args.tools.split(",") if tool.strip()]
-        return {"written": install_adapters(Path(args.path), tools)}
+        try:
+            source: Hub | None = Hub.from_environment(args.repo)
+        except (OSError, ValueError):
+            source = None  # no hub configured: write the static block without preferences
+        return {"written": install_adapters(Path(args.path), tools, source)}
     if args.command == "skills":
         return install_skills()
     hub = Hub.from_environment(args.repo)

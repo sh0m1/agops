@@ -453,9 +453,13 @@ topics: {}
 #     sweep_exclude: [Meetings/Zoom/**]   # notes the agops-notes skill does not sweep
 """
 DOCS_DIR = "docs"
-DOC_SUFFIXES = frozenset({".md", ".html", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"})
+# Images and draw.io files are diagrams: plan notes link them as they link pages.
+DIAGRAM_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".drawio"})
+DOC_SUFFIXES = frozenset({".md", ".html"}) | DIAGRAM_SUFFIXES
 # Agents' web pages (diagrams, interactive views) are mirrored as pages beside the docs.
 PAGE_SUFFIX = ".html"
+# `<meta name="agops-plan" content="plan-a plan-b">` links a page whose name is not the plan's.
+PAGE_PLAN_META = "agops-plan"
 MAX_DOC_BYTES = 10 * 1024 * 1024
 # Files an earlier notes layout generated. They are removed when they still carry its markers.
 LEGACY_VIEWS = ("views/Plans.base", "views/Knowledge.base", "views/Projects.base")
@@ -486,6 +490,8 @@ _ID_DATE_SUFFIX = re.compile(r"-\d{8}$")
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9`#(\[\"'])")
 _LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _PAGE_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_META_TAG = re.compile(r"<meta\b[^>]*>", re.IGNORECASE)
+_TAG_ATTR = re.compile(r"""([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 _DOC_LINK = re.compile(r"\]\(([^)\s<>]+?\.md)(#[^)\s<>]*)?\)")
 
 
@@ -551,6 +557,19 @@ def _href(from_note: str, to_note: str) -> str:
 
 def _link(text: str, from_note: str, to_note: str) -> str:
     return f"[{text}]({_href(from_note, to_note)})"
+
+
+def _page_plans(text: str) -> list[str]:
+    """Plan ids named by the page's `<meta name="agops-plan" content="...">` tags."""
+    plans: list[str] = []
+    for tag in _META_TAG.findall(text):
+        attrs = {
+            match.group(1).lower(): match.group(2) if match.group(2) is not None else match.group(3)
+            for match in _TAG_ATTR.finditer(tag)
+        }
+        if (attrs.get("name") or "").strip().lower() == PAGE_PLAN_META:
+            plans.extend(re.split(r"[\s,]+", html.unescape(attrs.get("content") or "")))
+    return list(dict.fromkeys(plan for plan in plans if plan))
 
 
 def _vault_root(target: Path) -> Path | None:
@@ -1195,7 +1214,9 @@ class _Context:
     """What plan, knowledge, and index rendering share within one render pass."""
 
     prefix: str | None = None
+    vault: Path | None = None
     docs: list[dict[str, Any]] = field(default_factory=list)
+    plan_ids: list[str] = field(default_factory=list)
     entries: list[dict[str, Any]] = field(default_factory=list)
     plans: dict[str, dict[str, Any]] = field(default_factory=dict)
     topics: dict[str, dict[str, list[str]]] = field(default_factory=dict)
@@ -1204,14 +1225,20 @@ class _Context:
     todo_dates: list[str] = field(default_factory=list)
 
     def plan_docs(self, plan: dict[str, Any]) -> list[dict[str, Any]]:
-        """Docs named after the plan (`<id>.md`, `<id>-*.md`) or mentioned by path in it."""
+        """Docs named after the plan (`<id>.md`, `<id>-*.md`), naming it in an agops-plan
+        meta tag, or mentioned by path in it.
+
+        A name goes to the longest plan id it starts with, so plan `network` does not claim
+        `network-isolation-flow.html`.
+        """
         plan_id = str(plan["id"])
+        ids = {*self.plan_ids, plan_id}
         text = yaml.safe_dump(_definition(plan), allow_unicode=True)
         found = [
             doc
             for doc in self.docs
-            if doc["stem"] == plan_id
-            or doc["stem"].startswith(plan_id + "-")
+            if _named_for(doc["stem"], ids) == plan_id
+            or plan_id in doc.get("plans", ())
             or doc["tail"] in text
         ]
         return sorted(found, key=lambda doc: (doc["stem"] != plan_id, doc["relative"]))
@@ -1233,6 +1260,12 @@ class _Context:
             or plan_id in f"{entry.get('title') or ''}\n{entry.get('body') or ''}"
         ]
         return sorted(related, key=lambda entry: str(entry.get("created_at") or ""), reverse=True)
+
+
+def _named_for(stem: str, plan_ids: set[str]) -> str | None:
+    """The longest plan id that the file stem is named after (`<id>` or `<id>-...`)."""
+    named = [plan for plan in plan_ids if stem == plan or stem.startswith(plan + "-")]
+    return max(named, key=len, default=None)
 
 
 def _entry_line(entry: dict[str, Any], from_note: str, excerpt: bool = False) -> str:
@@ -1310,7 +1343,47 @@ def _todo_tree(
     return ordered
 
 
-def _todo_section(context: _Context, plan_id: str, finished: bool) -> list[str]:
+def _todo_pages(context: _Context, item: TodoItem, note: str) -> list[str]:
+    """Links from a plan note to the pages and diagrams an item links.
+
+    A Markdown path is relative to the todo file, else to the vault root; a wikilink name is
+    looked up among the mirrored docs, as Obsidian finds a file by name. A target that is
+    missing or outside the vault is left out; the item's text still names it.
+    """
+    todos, vault, prefix = context.todos, context.vault, context.prefix
+    if todos is None or vault is None or prefix is None or not item.pages:
+        return []
+    root = vault.resolve()
+    links: list[str] = []
+    for page in item.pages:
+        target = page.target.strip()
+        if page.wiki:
+            name = target.lstrip("/")
+            candidates = [
+                prefix + doc["relative"]
+                for doc in context.docs
+                if (prefix + doc["relative"]).endswith("/" + name)
+                or prefix + doc["relative"] == name
+            ]
+            candidates.append(name)
+        else:
+            base = posixpath.dirname(todos.file)
+            candidates = [posixpath.normpath(posixpath.join(base, target)), target.lstrip("/")]
+        for candidate in candidates:
+            path = vault / candidate
+            if candidate.startswith("../") or not path.is_file():
+                continue
+            if not path.resolve().is_relative_to(root):
+                continue
+            label = _escape_html(page.label.replace("[", "(").replace("]", ")"))
+            links.append(_link(label, prefix + note, candidate))
+            break
+    return links
+
+
+def _todo_section(
+    context: _Context, plan_id: str, finished: bool, note: str = ""
+) -> list[str]:
     """The plan note's view of the user's todo file: plain bullets, never checkboxes."""
     todos = context.todos
     if todos is None:
@@ -1328,15 +1401,16 @@ def _todo_section(context: _Context, plan_id: str, finished: bool) -> list[str]:
     ordered = _todo_tree(todos, entries, context.todo_dates)
     for index, depth in ordered[:TODO_PLAN_LIMIT]:
         item = todos.items[index]
-        text = _escape_html(_short(display_text(item, plan_id), 200))
+        text = _escape_html(_short(display_text(item, plan_id, drop_pages=True), 200))
+        pages = "".join(f" · {link}" for link in _todo_pages(context, item, note))
         if depth:
-            lines.append("\t" * depth + f"- {text}")
+            lines.append("\t" * depth + f"- {text}{pages}")
             continue
         if item.parent is not None:
             crumb = _short(display_text(todos.items[item.parent], plan_id), 60)
             text = f"{_escape_html(crumb)} › {text}"
         day = context.todo_dates[index]
-        lines.append(f"- {day} · {text} · {heading_link(todos.file, item)}")
+        lines.append(f"- {day} · {text}{pages} · {heading_link(todos.file, item)}")
     if len(ordered) > TODO_PLAN_LIMIT:
         lines.append(f"- _{len(ordered) - TODO_PLAN_LIMIT} more in {file_link(todos.file)}_")
     lines.append("")
@@ -1625,7 +1699,7 @@ class NotesBridge:
             lines.extend([f"**Goal:** {lead}", ""])
             if rest or len(paragraphs) > 1:
                 lines.extend(["> [!quote]- Full goal", *_quoted(goal), ""])
-        for label, kind in (("Docs", "doc"), ("Pages", "page")):
+        for label, kind in (("Docs", "doc"), ("Pages", "page"), ("Diagrams", "diagram")):
             links = [
                 _link(doc["title"], note, doc["relative"])
                 for doc in context.plan_docs(plan)
@@ -1651,7 +1725,7 @@ class NotesBridge:
         for item in overview["blocked"]:
             needs.append(f"- Blocked: `{item['task']}` — {_short(item['reason'], 160)}")
         lines.extend(needs or ["_Nothing._"])
-        lines.extend(_todo_section(context, str(plan["id"]), finished))
+        lines.extend(_todo_section(context, str(plan["id"]), finished, note))
 
         lines.extend(["", f"## Tasks ({len(done_ids)}/{len(tasks)} done)"])
         if any(task.get("phase") for task in tasks):
@@ -2186,26 +2260,35 @@ class NotesBridge:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(data)
                 produced[relative] = digest
-                if suffix in {".md", PAGE_SUFFIX}:
-                    if suffix == PAGE_SUFFIX:
-                        found = _PAGE_TITLE.search(text)
-                        title = " ".join(html.unescape(found.group(1)).split()) if found else ""
-                    else:
-                        headings = (
-                            line[2:].strip() for line in text.splitlines() if line.startswith("# ")
-                        )
-                        title = next(headings, "")
-                    docs.append(
-                        {
-                            "relative": relative,
-                            "kind": "page" if suffix == PAGE_SUFFIX else "doc",
-                            "title": title or file.stem,
-                            "stem": file.stem,
-                            "tail": f"{file.parent.name}/{file.name}",
-                            "group": posixpath.dirname(relative)[len(DOCS_DIR) + 1 :],
-                            "modified": datetime.fromtimestamp(file.stat().st_mtime).date(),
-                        }
+                plans: list[str] = []
+                if suffix == PAGE_SUFFIX:
+                    kind = "page"
+                    found = _PAGE_TITLE.search(text)
+                    title = " ".join(html.unescape(found.group(1)).split()) if found else ""
+                    plans = _page_plans(text)
+                elif suffix == ".md":
+                    kind = "doc"
+                    headings = (
+                        line[2:].strip() for line in text.splitlines() if line.startswith("# ")
                     )
+                    title = next(headings, "")
+                else:
+                    kind = "diagram"
+                    title = file.stem.removesuffix(".drawio") + (
+                        " (draw.io)" if suffix == ".drawio" else ""
+                    )
+                docs.append(
+                    {
+                        "relative": relative,
+                        "kind": kind,
+                        "title": title or file.stem,
+                        "stem": file.stem,
+                        "tail": f"{file.parent.name}/{file.name}",
+                        "group": posixpath.dirname(relative)[len(DOCS_DIR) + 1 :],
+                        "modified": datetime.fromtimestamp(file.stat().st_mtime).date(),
+                        "plans": plans,
+                    }
+                )
         for relative in sorted(set(known) - set(produced)):
             path = target / relative
             if path.is_file() and not path.is_symlink():
@@ -2224,12 +2307,15 @@ class NotesBridge:
         if not context.docs:
             lines.append(
                 f"_No docs folders are configured. List them under `docs:` in `{SETTINGS_FILE}`; "
-                "each sync then copies their Markdown and HTML pages here, read-only._"
+                "each sync then copies their Markdown, HTML pages and diagrams here, read-only._"
             )
             return _tidy(lines)
-        pages = sum(1 for doc in context.docs if doc["kind"] == "page")
+        kinds = Counter(doc["kind"] for doc in context.docs)
+        counted = [_count(kinds["doc"], "document"), _count(kinds["page"], "page")]
+        if kinds["diagram"]:
+            counted.append(_count(kinds["diagram"], "diagram"))
         lines.append(
-            f"_{_count(len(context.docs) - pages, 'document')} and {_count(pages, 'page')}, "
+            f"_{', '.join(counted[:-1])} and {counted[-1]}, "
             f"copied read-only from the folders in `{SETTINGS_FILE}` on every sync. Edit the "
             "source; a copy edited here is no longer refreshed._"
         )
@@ -2246,7 +2332,7 @@ class NotesBridge:
                     suffix = " · " + ", ".join(
                         _link(plan["title"], "Docs.md", plan["note_path"]) for plan in plans
                     )
-                kind = " · page" if doc["kind"] == "page" else ""
+                kind = "" if doc["kind"] == "doc" else f" · {doc['kind']}"
                 lines.append(
                     f"- {_link(doc['title'], 'Docs.md', doc['relative'])}{kind}{suffix}"
                 )
@@ -2677,13 +2763,16 @@ class NotesBridge:
         written: list[str] = []
         settings, warnings = _load_settings(target)
         removed = self._remove_legacy(target, warnings)
+        summaries = self.hub.list_plans()
         context = _Context(
             prefix=_vault_prefix(target),
+            vault=_vault_root(target),
             docs=self._mirror_docs(target, sidecar, settings["docs"], warnings),
+            plan_ids=[str(summary["id"]) for summary in summaries],
             topics=settings["topics"],
         )
         loaded: list[tuple[dict[str, Any], PlanState, dict[str, Any], dict[str, Any]]] = []
-        for summary in self.hub.list_plans():
+        for summary in summaries:
             plan_id = summary["id"]
             plan = load_plan(self.hub.root, plan_id)
             plan_state = state.plans.get(plan_id, PlanState(plan_id))

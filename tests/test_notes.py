@@ -1267,6 +1267,7 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
     (source / "diagram.png").write_bytes(b"\x89PNG")
     (source / ".hidden.md").write_text("# Hidden\n")
     (source / "board.drawio").write_text("<xml/>")
+    (source / "workstreams" / "shared-plan-target.drawio.png").write_bytes(b"\x89PNG")
     (source / "leak.md").write_text("key AKIA" + "A" * 16 + "\n")
     (source / "workstreams" / "shared-plan-flow.html").write_text(
         "<html><head><title>Flow &amp;\n map</title></head><body>diagram</body></html>"
@@ -1286,11 +1287,13 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
     # Copies carry their folder in the name, so `[[shared-plan]]` still means the plan note.
     # Pages keep their names: Obsidian resolves [[name]] only to Markdown notes.
     assert copied == [
+        "board.drawio",
         "diagram.png",
         "notes (reference).md",
         "pages/2026-10-02-other.html",
         "workstreams/shared-plan (workstreams).md",
         "workstreams/shared-plan-flow.html",
+        "workstreams/shared-plan-target.drawio.png",
     ]
     assert [p for p in vault.rglob("shared-plan.md")] == [vault / "plans/active/shared-plan.md"]
     story = (mirror / "workstreams" / "shared-plan (workstreams).md").read_text(encoding="utf-8")
@@ -1298,19 +1301,24 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
     assert "[site](https://x.test/a.md)" in story
     assert any("leak (reference).md" in w and "credential" in w for w in result["warnings"])
     assert any("pages/leak.html" in w and "credential" in w for w in result["warnings"])
-    assert result["mirrored"]["docs"] == 4
+    assert result["mirrored"]["docs"] == 7
     plan = (vault / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
     assert (
         "**Docs:** [Shared plan story]"
         "(<../../docs/reference/workstreams/shared-plan (workstreams).md>)"
     ) in plan
     assert "**Pages:** [Flow & map](../../docs/reference/workstreams/shared-plan-flow.html)" in plan
+    assert (
+        "**Diagrams:** [shared-plan-target]"
+        "(../../docs/reference/workstreams/shared-plan-target.drawio.png)"
+    ) in plan
     index = (vault / "Docs.md").read_text(encoding="utf-8")
     assert (
         "- [Shared plan story](<docs/reference/workstreams/shared-plan (workstreams).md>) · "
         "[Shared plan](plans/active/shared-plan.md)"
     ) in index
-    assert "_2 documents and 2 pages," in index
+    assert "_2 documents, 2 pages and 3 diagrams," in index
+    assert "- [board (draw.io)](docs/reference/board.drawio) · diagram" in index
     assert "- [2026-10-02-other](docs/reference/pages/2026-10-02-other.html) · page" in index
     home = (vault / "Home.md").read_text(encoding="utf-8")
     recent = home.split("## Recent pages")[1].split("## Recent knowledge")[0]
@@ -1687,3 +1695,64 @@ def test_brief_never_creates_notes_settings(
     assert "## Todos" not in hub.brief(tmp_path)
     assert not settings.exists()
     assert bridge.todo_list() == (None, [])
+
+
+def test_page_meta_and_the_longest_plan_id_link_pages_to_plans(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    source = tmp_path / "reference"
+    (source / "pages").mkdir(parents=True)
+    (source / "shared-plan-flow.html").write_text("<title>Flow</title>")
+    (source / "pages" / "2026-10-12-review.html").write_text(
+        "<head><meta content='shared-plan, other' name=\"agops-plan\"><title>Review</title>"
+    )
+    short = tmp_path / "short.yaml"
+    short.write_text(plan_file.read_text().replace("id: shared-plan", "id: shared", 1))
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.draft_plan(short, "codex", "two")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    (vault / "notes.yaml").write_text(f"docs:\n  - {source}\n", encoding="utf-8")
+    bridge.render_all()
+
+    plan = (vault / "plans" / "active" / "shared-plan.md").read_text(encoding="utf-8")
+    assert (
+        "**Pages:** [Review](../../docs/reference/pages/2026-10-12-review.html) · "
+        "[Flow](../../docs/reference/shared-plan-flow.html)"
+    ) in plan
+    other = (vault / "plans" / "active" / "shared.md").read_text(encoding="utf-8")
+    assert "**Pages:**" not in other  # `shared-plan-flow` belongs to the longer plan id
+
+
+def test_todo_page_links_are_relinked_from_the_plan_note(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    source = tmp_path / "reference"
+    (source / "workstreams").mkdir(parents=True)
+    (source / "workstreams" / "flow.html").write_text("<title>Flow</title>")
+    (source / "board.drawio").write_text("<xml/>")
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _todo_vault(hub, tmp_path)
+    vault = tmp_path / "vault"
+    settings = vault / "agops" / "notes.yaml"
+    settings.write_text(
+        settings.read_text(encoding="utf-8") + f"docs:\n  - {source}\n", encoding="utf-8"
+    )
+    (vault / "Todo" / "ALL.md").write_text(
+        "## Inbox\n"
+        "- [ ] Review [[shared-plan]] [the flow](../agops/docs/reference/workstreams/flow.html)"
+        " and [[board.drawio]], not [gone](../nowhere.html)\n",
+        encoding="utf-8",
+    )
+    result = bridge.render_all()
+    assert not result["warnings"]
+    note = _plan_note(tmp_path)
+    section = note[note.index("## Todos") : note.index("## Tasks")]
+    today = datetime.now(UTC).date().isoformat()
+    assert (
+        f"- {today} · Review the flow and board.drawio, not gone · "
+        "[the flow](../../docs/reference/workstreams/flow.html) · "
+        "[board.drawio](../../docs/reference/board.drawio) · [[Todo/ALL#Inbox|ALL › Inbox]]"
+    ) in section

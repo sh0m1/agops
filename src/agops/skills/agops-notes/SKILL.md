@@ -22,7 +22,8 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
   last 30 days), `Projects.md` (projects with plans or knowledge), `Docs.md` — generated
   indexes.
 - `notes.yaml` — the user's settings: `docs:` folders mirrored read-only into `docs/`
-  (Markdown docs and HTML pages; a plan links those named after it), and `topics:` rules that
+  (Markdown docs, HTML pages and diagrams; a plan links those named after it or naming it in
+  `<meta name="agops-plan" content="<plan-id>">`), and `topics:` rules that
   tag notes `topic/<name>`, and `todos:` (the user's single todo file outside this folder,
   read only by agops; plan notes get a generated `## Todos` section from it). Never edit it
   without being asked.
@@ -93,4 +94,7 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
 - Personal thoughts go between the `agops:personal` markers of any note.
 - Never delete or move files in the mirror by hand; retire or cancel in the hub and sync.
 - Open work lives only in the todo file. Elsewhere, write it as a bullet that links the file.
+- When you make a page or diagram for a todo item, add a Markdown link to its vault copy
+  (`docs/<folder>/...`, relative to the todo file) at the end of that item's line. Change
+  nothing else on the line. The plan note then links it next to the item.
 - In Obsidian: pin `Home.md`, open `agops.base` for sortable tables, filter by tag `agops`.

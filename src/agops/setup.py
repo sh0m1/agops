@@ -29,6 +29,7 @@ __all__ = [
     "config_path",
     "install_skills",
     "merge_managed_block",
+    "refresh_instructions",
     "render_instructions",
     "setup",
 ]
@@ -127,6 +128,42 @@ def merge_managed_block(path: Path, content: str = INSTRUCTIONS, backup: bool = 
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(path, path.with_name(f"{path.name}.bak.{stamp}"))
     path.write_text(updated, encoding="utf-8")
+
+
+def instruction_files(home: Path) -> list[Path]:
+    """The user-level instruction files `agops setup` writes, one path per real file."""
+    paths: dict[Path, Path] = {}
+    for path in (home / ".codex" / "AGENTS.md", home / ".claude" / "CLAUDE.md"):
+        # ~/.codex/AGENTS.md is often a symlink to ~/.claude/CLAUDE.md: write that file once.
+        paths.setdefault(path.resolve(), path)
+    return list(paths.values())
+
+
+def refresh_instructions(hub: Hub, home: Path | None = None) -> list[str]:
+    """Re-render the managed block after a preference change; returns the files rewritten.
+
+    Only the hub that the profile config names is rendered, and only into files that already
+    carry the managed block, so a scratch hub (a test, an explicit --repo) never rewrites the
+    user's instructions and a file without the block is left for `agops setup` to adopt.
+    """
+    home = (home or default_home()).expanduser()
+    entry = load_profiles(home).profiles.get(hub.profile or "", {})
+    repo = entry.get("repo")
+    if not repo or Path(repo).expanduser().resolve() != hub.root.resolve():
+        return []
+    rendered = render_instructions(hub)
+    written: list[str] = []
+    for path in instruction_files(home):
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if MANAGED_START not in existing or MANAGED_END not in existing:
+            continue
+        merge_managed_block(path, rendered, backup=False)
+        if path.read_text(encoding="utf-8") != existing:
+            written.append(str(path))
+    return written
 
 
 def setup(

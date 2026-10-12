@@ -70,7 +70,12 @@ agops setup                 # regenerates the managed block from the hub
 
 `setup` renders every active `preference` entry at `global` scope into the managed block of the
 Codex and Claude instruction files, so the hub is the single source of truth and the files are
-generated. Retiring the entry removes it on the next `setup`:
+generated. After that, each change to a global entry re-renders the block at once in the files
+that already have it (`~/.codex/AGENTS.md` is often a symlink to `~/.claude/CLAUDE.md`; the
+shared file is written once). Only the hub that the profile config names does this, so a
+scratch hub never touches your files. `agops adapter install` writes the same preferences into
+a repository's `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, Copilot and Cursor files. Retiring the
+entry removes it in the same way:
 
 ```sh
 agops knowledge retire --scope global --key response-style --reason "superseded"
@@ -274,9 +279,11 @@ as `agops.old.base` and replaced by the new default).
 that. `docs:` lists folders whose Markdown and images are copied read-only into `docs/<folder>/` on
 every sync, so vault search and plan notes reach long-form documents. HTML files are mirrored too,
 as pages: an agent's web page with diagrams sits beside the docs, keeps its name, takes its title
-from `<title>`, and opens in the browser from Obsidian. A plan links the docs and pages named
-`<plan-id>.*` or `<plan-id>-*` and any whose path its definition mentions, on separate `Docs:` and
-`Pages:` lines; `Home.md` lists the newest pages. Each Markdown copy carries its folder in its name
+from `<title>`, and opens in the browser from Obsidian. Images and `.drawio` files are diagrams.
+A plan links the docs, pages and diagrams named `<plan-id>.*` or `<plan-id>-*` (a name goes to
+the longest plan id it starts with), any whose path its definition mentions, and any page with
+`<meta name="agops-plan" content="<plan-id>">`. They show on separate `Docs:`, `Pages:` and
+`Diagrams:` lines; `Home.md` lists the newest pages. Each Markdown copy carries its folder in its name
 (`workstreams/x.md` becomes `workstreams/x (workstreams).md`, with links between the docs
 rewritten), so a doc named after a plan never captures a `[[plan-id]]` link. Dot files, symlinks,
 and files matching credential patterns are skipped, and a copy edited in the vault is kept and no
@@ -299,7 +306,9 @@ the items below it; the nearest link wins. Each item has a date: the first date 
 link (a dated meeting note or a `Team weekly#2026-10-05` section), else its parent's, else its
 heading's, else the day agops first saw it. Each plan note then gets a `## Todos` section after
 "Needs you" with the open items that link it, newest first with their dates, as plain bullets
-with a link back to their heading (never checkboxes, so you tick only in the todo file). `Home.md` shows the counts, `agops notes
+with a link back to their heading (never checkboxes, so you tick only in the todo file). An item's
+own links to pages and diagrams (`[flow](../agops/docs/x/flow.html)` or `[[flow.html]]`) are
+linked again after it, from the plan note's path; a link whose file is missing is left out. `Home.md` shows the counts, `agops notes
 status` reports `todos.stale` when the file changed after the last render, `agops notes review`
 lists the Inbox (`inbox:`, default `Inbox`) and open items that link finished plans, and
 `agops brief` lists up to 10 open items that link open plans (the current project's plans

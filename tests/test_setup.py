@@ -7,13 +7,17 @@ from pathlib import Path
 import pytest
 from conftest import git, which_for
 
+from agops.config import Profiles, save_profiles
 from agops.health import doctor
 from agops.hub import Hub
 from agops.setup import (
     INSTRUCTIONS,
+    PREFERENCE_HEADING,
     config_path,
     install_skills,
     merge_managed_block,
+    refresh_instructions,
+    render_instructions,
     setup,
 )
 
@@ -355,3 +359,60 @@ def test_setup_rerun_keeps_an_existing_profiles_notes_target(
     _setup(None, runtime, fake_home, which_for("agops-mcp"), runner)
     again = json.loads(config.read_text(encoding="utf-8"))
     assert again["profiles"]["default"]["notes_target"] == vault
+
+
+def _preference(hub: Hub, key: str, body: str, scope: str = "global") -> None:
+    hub.add_knowledge(scope, key, key, body, "codex", "s1", kind="preference")
+
+
+def test_render_instructions_lists_only_global_preferences(local_hub: Path) -> None:
+    hub = Hub(local_hub, profile="default")
+    assert render_instructions(hub) == INSTRUCTIONS
+    _preference(hub, "visual-pages", "Make a\n  web page.")
+    _preference(hub, "repo-style", "Not here.", scope="project:acme")
+    rendered = render_instructions(hub)
+    section = rendered.split(PREFERENCE_HEADING, 1)[1]
+    assert "- Make a web page." in section and "Not here." not in rendered
+    assert rendered.rstrip().endswith("<!-- END AGOPS MANAGED -->")
+
+
+def test_preference_changes_refresh_the_user_instruction_files(
+    local_hub: Path, fake_home: Path
+) -> None:
+    claude = fake_home / ".claude" / "CLAUDE.md"
+    claude.parent.mkdir(parents=True)
+    merge_managed_block(claude, INSTRUCTIONS, backup=False)
+    claude.write_text("# Mine\n\n" + claude.read_text(encoding="utf-8"), encoding="utf-8")
+    codex = fake_home / ".codex" / "AGENTS.md"
+    codex.parent.mkdir(parents=True)
+    codex.symlink_to(claude)
+    hub = Hub(local_hub, profile="default")
+
+    # A hub the profile config does not name never rewrites the user's files.
+    _preference(hub, "visual-pages", "Make a web page.")
+    assert "Make a web page." not in claude.read_text(encoding="utf-8")
+
+    save_profiles(Profiles("default", {"default": {"repo": str(local_hub)}}), fake_home)
+    event = hub.add_knowledge(
+        "global", "page-links", "Links", "Link the page.", "codex", "s1", kind="preference"
+    )
+    assert event["instructions_refreshed"] == [str(codex)]  # the symlinked file, once
+    text = claude.read_text(encoding="utf-8")
+    assert text.startswith("# Mine") and "- Link the page." in text
+    assert "- Make a web page." in text and text.count("BEGIN AGOPS MANAGED") == 1
+    assert codex.is_symlink()
+    assert refresh_instructions(hub, fake_home) == []  # already current
+
+    hub.retire_knowledge("global", "page-links", "merged", "codex", "s1")
+    assert "Link the page." not in claude.read_text(encoding="utf-8")
+
+
+def test_refresh_skips_files_without_the_managed_block(local_hub: Path, fake_home: Path) -> None:
+    claude = fake_home / ".claude" / "CLAUDE.md"
+    claude.parent.mkdir(parents=True)
+    claude.write_text("# Only mine\n", encoding="utf-8")
+    hub = Hub(local_hub, profile="default")
+    save_profiles(Profiles("default", {"default": {"repo": str(local_hub)}}), fake_home)
+    _preference(hub, "visual-pages", "Make a web page.")
+    assert claude.read_text(encoding="utf-8") == "# Only mine\n"
+    assert not (fake_home / ".codex" / "AGENTS.md").exists()

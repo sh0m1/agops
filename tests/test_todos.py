@@ -249,3 +249,27 @@ def test_first_seen_keeps_known_dates_and_drops_gone_items() -> None:
     seen = todos.first_seen({old.key: "2026-01-01", "gone": "2025-01-01"}, "2026-10-08")
     assert seen == {old.key: "2026-01-01", new.key: "2026-10-08"}
     assert todos.dates(seen, "2026-10-08") == ["2026-01-01", "2026-10-08", "2026-10-05"]
+
+
+def test_page_links_are_kept_without_changing_plan_links_or_keys() -> None:
+    text = (
+        "## Inbox\n"
+        "- [ ] Review the flow [[net-iso]] [flow](<../agops/docs/x/net-iso flow.html>) "
+        "![[board.drawio]] [site](https://x.test/a.html) [[2026-10-05 page.html]] "
+        "`[code](skip.html)`\n"
+    )
+    item = parse_todos(text, PLANS).items[0]
+    assert item.plans == ("net-iso",)
+    assert [(page.label, page.target, page.wiki) for page in item.pages] == [
+        ("flow", "../agops/docs/x/net-iso flow.html", False),
+        ("board.drawio", "board.drawio", True),
+        ("2026-10-05 page.html", "2026-10-05 page.html", True),
+    ]
+    assert item.date is None  # a dated page name is not a source date
+    plain = parse_todos("## Inbox\n- [ ] Review the flow [[net-iso]] flow\n", PLANS).items[0]
+    linked = parse_todos(
+        "## Inbox\n- [ ] Review the flow [[net-iso]] [flow](a/b.html)\n", PLANS
+    ).items[0]
+    assert linked.key == plain.key  # adding a page link keeps the first-seen date
+    assert display_text(linked, "net-iso", drop_pages=True) == "Review the flow flow"
+    assert display_text(linked, "net-iso") == "Review the flow [flow](a/b.html)"

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .setup import INSTRUCTIONS, merge_managed_block
+from .hub import Hub
+from .setup import merge_managed_block, render_instructions
 
 ADAPTER_PATHS = {
     "agents": Path("AGENTS.md"),
@@ -13,13 +14,15 @@ ADAPTER_PATHS = {
 }
 
 
-def install_adapters(root: Path, tools: list[str]) -> list[str]:
+def install_adapters(root: Path, tools: list[str], hub: Hub | None = None) -> list[str]:
+    """Write the managed block, with the hub's standing preferences when a hub is given."""
     root = root.expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"Project directory does not exist: {root}")
     unknown = sorted(set(tools) - ADAPTER_PATHS.keys())
     if unknown:
         raise ValueError(f"Unknown adapter(s): {', '.join(unknown)}")
+    content = render_instructions(hub)
     written: list[str] = []
     for tool in tools:
         relative = ADAPTER_PATHS[tool]
@@ -27,6 +30,6 @@ def install_adapters(root: Path, tools: list[str]) -> list[str]:
         if tool == "cursor" and not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("---\nalwaysApply: true\n---\n", encoding="utf-8")
-        merge_managed_block(path, INSTRUCTIONS, backup=False)
+        merge_managed_block(path, content, backup=False)
         written.append(str(relative))
     return written

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from agops.adapters import install_adapters
+from agops.hub import Hub
 
 
 def test_adapters_preserve_existing_instructions_and_are_idempotent(tmp_path: Path) -> None:
@@ -20,3 +21,16 @@ def test_adapters_preserve_existing_instructions_and_are_idempotent(tmp_path: Pa
 def test_unknown_adapter_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Unknown adapter"):
         install_adapters(tmp_path, ["imaginary"])
+
+
+def test_adapters_carry_the_hub_standing_preferences(local_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.add_knowledge(
+        "global", "visual-pages", "Pages", "Make a web page.", "codex", "s1", kind="preference"
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    install_adapters(project, ["agents", "gemini", "cursor"], hub)
+    for name in ("AGENTS.md", "GEMINI.md", ".cursor/rules/agops.mdc"):
+        text = (project / name).read_text(encoding="utf-8")
+        assert "## Standing preferences" in text and "- Make a web page." in text

@@ -273,3 +273,15 @@ def test_page_links_are_kept_without_changing_plan_links_or_keys() -> None:
     assert linked.key == plain.key  # adding a page link keeps the first-seen date
     assert display_text(linked, "net-iso", drop_pages=True) == "Review the flow flow"
     assert display_text(linked, "net-iso") == "Review the flow [flow](a/b.html)"
+
+
+def test_done_seen_dates_new_ticks_and_keeps_removed_ones() -> None:
+    seeded = parse_todos("- [x] old\n- [ ] next\n").done_seen(None, "2026-10-01", "2026-08-01")
+    assert [record["date"] for record in seeded.values()] == [None]
+    seen = parse_todos("- [x] old\n- [x] next\n").done_seen(seeded, "2026-10-02", "2026-08-01")
+    assert sorted(str(record["date"]) for record in seen.values()) == ["2026-10-02", "None"]
+    removed = parse_todos("- [x] old\n")
+    assert len(removed.done_seen(seen, "2026-10-03", "2026-08-01")) == 2
+    assert len(removed.done_seen(seen, "2026-12-30", "2026-11-01")) == 1  # expired
+    reopened = parse_todos("- [x] old\n- [ ] next\n")
+    assert len(reopened.done_seen(seen, "2026-10-03", "2026-08-01")) == 1

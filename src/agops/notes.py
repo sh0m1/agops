@@ -45,6 +45,7 @@ from .todos import (
     heading_link,
     load_todos,
     normalize_settings,
+    plain_text,
 )
 
 if TYPE_CHECKING:
@@ -468,6 +469,15 @@ HOME_EVENT_DAYS = 7
 HOME_EVENT_LIMIT = 15
 HOME_KNOWLEDGE_LIMIT = 8
 HOME_PAGE_LIMIT = 5
+HOME_TOPIC_NEXT = 3
+HOME_TICKED_LIMIT = 15
+HOME_DONE_LIMIT = 10
+ACHIEVED_DAYS = 14
+ACHIEVED_WEEKS = 4
+# A ticked item removed from the todo file still counts in the weekly table this long.
+DONE_SEEN_DAYS = 56
+# Plans and todos that match no configured topic.
+OTHER_TOPIC = "other"
 ACTIVITY_EVENT_DAYS = 30
 ACTIVITY_EVENT_LIMIT = 200
 BUCKET_TITLES = {
@@ -644,6 +654,31 @@ def _topics(rules: dict[str, dict[str, list[str]]], projects: list[str], text: s
         if by_project or by_keyword:
             found.append(name)
     return found
+
+
+def _primary_topic(
+    rules: dict[str, dict[str, list[str]]], projects: list[str], text: str
+) -> str | None:
+    """The one topic Home files a plan under.
+
+    A keyword in the title or id wins first, then the topic that matches the most projects,
+    then configuration order.
+    """
+    lowered = text.lower()
+    best: str | None = None
+    best_score = (0, 0)
+    for name, rule in rules.items():
+        by_title = any(
+            re.search(rf"\b{re.escape(word.lower())}\b", lowered) for word in rule["keywords"]
+        )
+        by_project = sum(
+            any(fnmatch.fnmatchcase(project, pattern) for pattern in rule["projects"])
+            for project in projects
+        )
+        score = (int(by_title), by_project)
+        if score > best_score:
+            best, best_score = name, score
+    return best
 
 
 def _with_topic_tags(tags: list[Any], base: list[str], topics: list[str]) -> list[Any]:
@@ -1156,6 +1191,7 @@ def _plan_overview(
         "last_event_at": plan_state.last_event_at,
         "completed_at": plan_state.completed_at,
         "cancelled_at": plan_state.cancelled_at,
+        "superseded_by": plan_state.superseded_by,
         "idle_days": idle_days(plan_state.last_event_at, now),
         "tasks_total": counts["total"],
         "tasks_done": counts["done"],
@@ -1223,6 +1259,8 @@ class _Context:
     todos: TodoList | None = None
     todo_inbox: str = "Inbox"
     todo_dates: list[str] = field(default_factory=list)
+    todo_topics: list[str] = field(default_factory=list)
+    done_seen: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def plan_docs(self, plan: dict[str, Any]) -> list[dict[str, Any]]:
         """Docs named after the plan (`<id>.md`, `<id>-*.md`), naming it in an agops-plan
@@ -1425,27 +1463,65 @@ def _todo_section(
     return lines
 
 
-def _todo_home(context: _Context) -> list[str]:
-    todos = context.todos
+def _todo_topic(context: _Context, item: TodoItem) -> str:
+    """An item's topic: its plan's, else its headings' or tags', else its own words'."""
+    for plan_id in item.plans:
+        plan = context.plans.get(plan_id)
+        if plan is not None:
+            return plan.get("primary_topic") or OTHER_TOPIC
+    for text in (" ".join([*item.headings, item.group or "", *item.tags]), item.text):
+        found = _topics(context.topics, [], text)
+        if found:
+            return found[0]
+    return OTHER_TOPIC
+
+
+def plan_todo_counts(todos: TodoList | None, plan_id: str) -> tuple[int, int]:
+    """(done, total) over the todo items that link the plan; cancelled items do not count."""
     if todos is None:
-        return []
-    counts = todos.counts()
-    inbox = file_link(todos.file, context.todo_inbox, context.todo_inbox)
-    lines = [
-        "",
-        "## Todos",
-        "",
-        f"{file_link(todos.file)} · {counts['open']} open · {counts['inbox']} in {inbox} · "
-        f"{counts['linked']} linked to plans · {counts['done']} done",
-    ]
-    for plan in context.plans.values():
-        if plan["status"] not in {"completed", "cancelled"}:
-            continue
-        stale = len(todos.for_plan(plan["id"]))
-        if stale:
-            link = _link(plan["title"], "Home.md", plan["note_path"])
-            lines.append(f"- {_count(stale, 'open todo')} link the {plan['status']} plan {link}")
-    return lines
+        return 0, 0
+    linked = [item for item in todos.for_plan(plan_id, state=None) if item.state != "cancelled"]
+    return sum(item.state == "done" for item in linked), len(linked)
+
+
+def _ratio(done: int, total: int) -> str:
+    return f"{done}/{total}" if total else "—"
+
+
+def _item_plan(context: _Context, item: TodoItem) -> dict[str, Any] | None:
+    return next((context.plans[pid] for pid in item.plans if pid in context.plans), None)
+
+
+def _todo_line(context: _Context, index: int, day: str, from_note: str) -> str:
+    """`- day · text · plan or heading` for one item on Home."""
+    todos = context.todos
+    assert todos is not None
+    item = todos.items[index]
+    plan = _item_plan(context, item)
+    plan_id = str(plan["id"]) if plan else None
+    text = display_text(item, plan_id, drop_pages=True)
+    if len(text) > 140:
+        text = plain_text(item, plan_id)
+    text = _escape_html(_short(text, 140))
+    if item.parent is not None:
+        crumb = _short(plain_text(todos.items[item.parent], plan_id), 50)
+        text = f"{_escape_html(crumb)} › {text}"
+    where = (
+        _link(_short(str(plan["title"]), 50), from_note, plan["note_path"])
+        if plan
+        else heading_link(todos.file, item)
+    )
+    return f"- {day} · {text} · {where}"
+
+
+def _folded(title: str, lines: list[str]) -> list[str]:
+    """An Obsidian callout that starts folded, so long lists take one line."""
+    return ["", f"> [!info]- {title}", *(f"> {line}" if line else ">" for line in lines)]
+
+
+def _week_starts(today: date, weeks: int) -> list[date]:
+    monday = today - timedelta(days=today.weekday())
+    return [monday - timedelta(days=7 * offset) for offset in range(weeks)]
 
 
 class NotesBridge:
@@ -1672,7 +1748,9 @@ class NotesBridge:
         last_activity = _date_only(state.last_event_at)
         progress = f"{overview['tasks_done']}/{overview['tasks_total']}"
         topics = overview.get("topics") or []
-        owned = {"tags", "status", "health", "workspace", "progress", "last_activity", "topics"}
+        owned = {
+            "tags", "status", "health", "workspace", "progress", "todos", "last_activity", "topics"
+        }
         front: dict[str, Any] = {
             "tags": _with_topic_tags(_as_list(custom.get("tags")), ["agops", "agops/plan"], topics),
             "status": status,
@@ -1680,6 +1758,9 @@ class NotesBridge:
             "workspace": overview["workspace"],
             "progress": progress,
         }
+        todos_done, todos_total = overview.get("todos_done", 0), overview.get("todos_total", 0)
+        if todos_total:
+            front["todos"] = f"{todos_done}/{todos_total}"
         if last_activity is not None:
             front["last_activity"] = last_activity
         if topics:
@@ -1688,9 +1769,16 @@ class NotesBridge:
         managed = yaml.safe_dump(front, sort_keys=False, allow_unicode=True).rstrip()
         note = overview["note_path"]
 
-        summary = [overview["health"], overview["workspace"], f"{progress} done"]
+        summary = [overview["health"], overview["workspace"], f"{progress} tasks done"]
+        if todos_total:
+            summary.append(f"{todos_done}/{todos_total} todos done")
         if last_activity is not None:
             summary.append(f"last {last_activity.isoformat()}")
+        successor = context.plans.get(str(overview.get("superseded_by") or ""))
+        if successor is not None:
+            summary.append(
+                "superseded by " + _link(successor["title"], note, successor["note_path"])
+            )
         lines = ["---", managed, "---", "", f"# {plan['title']}", "", " · ".join(summary), ""]
         goal = str(plan.get("goal") or "").strip()
         if goal:
@@ -1707,6 +1795,13 @@ class NotesBridge:
             ]
             if links:
                 lines.extend([f"**{label}:** " + " · ".join(links), ""])
+        replaced = [
+            _link(context.plans[pid]["title"], note, context.plans[pid]["note_path"])
+            for pid in overview.get("replaces") or []
+            if pid in context.plans
+        ]
+        if replaced:
+            lines.extend(["**Replaces:** " + " · ".join(replaced), ""])
         if overview["projects"]:
             lines.extend(["**Projects:** " + _code_items(overview["projects"]), ""])
 
@@ -1823,6 +1918,10 @@ class NotesBridge:
             found = _date_only(plan["last_event_at"])
             return f" · last {found.isoformat()}" if found else ""
 
+        def todo_text(plan: dict[str, Any]) -> str:
+            total = plan.get("todos_total", 0)
+            return f" · {plan.get('todos_done', 0)}/{total} todos done" if total else ""
+
         lines = ["# Plans", "", "## Active", ""]
         if not groups["active"]:
             lines.append("_None._")
@@ -1837,7 +1936,7 @@ class NotesBridge:
                 idle_text = f" · {idle}d idle" if idle is not None else ""
                 lines.append(
                     f"- [{plan['title']}]({plan['note_path']}) · {plan['health']} · "
-                    f"{plan['tasks_done']}/{plan['tasks_total']} done"
+                    f"{plan['tasks_done']}/{plan['tasks_total']} tasks done{todo_text(plan)}"
                     f"{last(plan)}{idle_text}{pending}"
                 )
                 lines.extend(details(plan, "Next"))
@@ -1848,7 +1947,7 @@ class NotesBridge:
         for plan in newest_first(groups["draft"]):
             lines.append(
                 f"- [{plan['title']}]({plan['note_path']}) · draft · "
-                f"{_count(plan['tasks_total'], 'task')}{last(plan)}"
+                f"{_count(plan['tasks_total'], 'task')}{todo_text(plan)}{last(plan)}"
             )
             lines.extend(details(plan, "Starts with"))
         lines.extend(["", "## Completed", ""])
@@ -1867,9 +1966,13 @@ class NotesBridge:
         )
         if not cancelled:
             lines.append("_None._")
+        titles = {plan["id"]: plan for plan in overviews}
         for plan in cancelled:
             date = _date_only(plan["cancelled_at"])
             suffix = f" · cancelled {date.isoformat()}" if date else ""
+            successor = titles.get(plan.get("superseded_by"))
+            if successor is not None:
+                suffix += f" · superseded by [{successor['title']}]({successor['note_path']})"
             lines.append(f"- [{plan['title']}]({plan['note_path']}){suffix}")
         return _tidy(lines)
 
@@ -1886,19 +1989,24 @@ class NotesBridge:
         stalled = sum(1 for item in active if item["health"] == "stalled")
         blocked_tasks = sum(item["tasks_blocked"] for item in active)
         ready = len(self.hub.ready_tasks())
+        todos = context.todos
+        counts = todos.counts() if todos is not None else None
+        status = [f"{len(active)} active", f"{live} live", f"{stalled} stalled"]
+        status += [f"{len(drafts)} draft", f"{blocked_tasks} blocked tasks", f"{ready} ready tasks"]
+        if counts is not None:
+            status.insert(0, f"{counts['open']} open todos")
         lines = [
             "# agops home",
             "",
-            f"_As of {now.strftime('%Y-%m-%d %H:%M')} UTC · {len(active)} active · {live} live · "
-            f"{stalled} stalled · {len(drafts)} draft · {blocked_tasks} blocked tasks · "
-            f"{ready} ready tasks_",
+            f"_As of {now.strftime('%Y-%m-%d %H:%M')} UTC · " + " · ".join(status) + "_",
             "",
             "## Needs you",
             "",
         ]
 
-        def link(plan: dict[str, Any]) -> str:
-            return _link(plan["title"], "Home.md", plan["note_path"])
+        def link(plan: dict[str, Any], limit: int | None = None) -> str:
+            title = str(plan["title"])
+            return _link(_short(title, limit) if limit else title, "Home.md", plan["note_path"])
 
         needs: list[str] = []
         for plan in active:
@@ -1916,104 +2024,63 @@ class NotesBridge:
         for plan in active:
             if plan["health"] == "stalled":
                 needs.append(f"- Stalled: {link(plan)} · {plan['idle_days']}d idle")
-        for plan in sorted(drafts, key=lambda item: item["last_event_at"] or "", reverse=True):
+        if drafts:
+            ordered_drafts = sorted(
+                drafts, key=lambda item: item["last_event_at"] or "", reverse=True
+            )
             needs.append(
-                f"- Approve or cancel the draft: {link(plan)} · revision "
-                f"{plan['latest_revision']} · {_count(plan['tasks_total'], 'task')}"
+                f"- {_count(len(drafts), 'draft plan')} to approve or cancel: "
+                + " · ".join(link(plan, 60) for plan in ordered_drafts)
             )
+        if todos is not None and counts is not None:
+            for plan in overviews:
+                if plan["status"] not in {"completed", "cancelled"}:
+                    continue
+                stale = len(todos.for_plan(plan["id"]))
+                if stale:
+                    needs.append(
+                        f"- {_count(stale, 'open todo')} link the {plan['status']} plan "
+                        f"{link(plan)}"
+                    )
+            if counts["inbox"]:
+                inbox = file_link(todos.file, context.todo_inbox, context.todo_inbox)
+                needs.append(f"- {_count(counts['inbox'], 'todo')} in {inbox} to sort or link")
         lines.extend(needs or ["_Nothing._"])
-        lines.extend(_todo_home(context))
 
-        lines.extend(["", "## Plans", ""])
-        open_plans = active + drafts
-        if not open_plans:
-            lines.append("_None._")
-        by_workspace: dict[str, list[dict[str, Any]]] = {}
-        for plan in open_plans:
-            by_workspace.setdefault(plan["workspace"], []).append(plan)
+        lines.extend(self._home_work(active + drafts, context, link))
+        lines.extend(self._home_achieved(overviews, now, context, events))
 
-        def newest(workspace: str) -> str:
-            return max(plan["last_event_at"] or "" for plan in by_workspace[workspace])
-
-        for workspace in sorted(by_workspace, key=lambda name: (newest(name), name), reverse=True):
-            lines.extend(
-                [
-                    f"### {workspace}",
-                    "",
-                    "| Plan | Status | Done | Next | Last activity |",
-                    "|---|---|---|---|---|",
-                ]
-            )
-            ordered = sorted(
-                by_workspace[workspace], key=lambda item: item["last_event_at"] or "", reverse=True
-            )
-            ordered.sort(key=lambda item: item["status"] != "active")
-            for plan in ordered:
-                last = _date_only(plan["last_event_at"])
-                idle = plan["idle_days"]
-                last_text = last.isoformat() if last else ""
-                if last and idle is not None:
-                    last_text += f" ({idle}d)"
-                cells = [
-                    link(plan),
-                    _plan_status_cell(plan),
-                    f"{plan['tasks_done']}/{plan['tasks_total']}",
-                    _next_cell(plan),
-                    last_text,
-                ]
-                lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")
-            lines.append("")
-
-        lines.extend(["", f"## Last {HOME_EVENT_DAYS} days", ""])
         cutoff = now - timedelta(days=HOME_EVENT_DAYS)
         recent = self._event_lines(
             [event for event in events if parse_time(event["occurred_at"]) >= cutoff],
             context,
             "Home.md",
         )
-        lines.extend(recent[:HOME_EVENT_LIMIT] or ["_Nothing recorded._"])
+        shown = recent[:HOME_EVENT_LIMIT] or ["_Nothing recorded._"]
         if len(recent) > HOME_EVENT_LIMIT:
-            lines.append(f"- _{len(recent) - HOME_EVENT_LIMIT} more in [[Activity]]_")
+            shown.append(f"- _{len(recent) - HOME_EVENT_LIMIT} more in [[Activity]]_")
+        lines.extend(["", "## Recent"])
+        lines.extend(_folded(f"Last {HOME_EVENT_DAYS} days ({len(recent)})", shown))
 
-        lines.extend(["", "## Recent pages", ""])
         pages = sorted(
             (doc for doc in context.docs if doc["kind"] == "page"),
             key=lambda doc: (doc["modified"], doc["relative"]),
             reverse=True,
         )[:HOME_PAGE_LIMIT]
         used_by = context.doc_plans()
-        for page in pages:
-            plans = "".join(f" · {link(plan)}" for plan in used_by.get(page["relative"], []))
-            lines.append(
-                f"- {_link(page['title'], 'Home.md', page['relative'])} · "
-                f"{page['modified'].isoformat()}{plans}"
-            )
-        if not pages:
-            lines.append("_None._")
+        page_lines = [
+            f"- {_link(page['title'], 'Home.md', page['relative'])} · "
+            f"{page['modified'].isoformat()}"
+            + "".join(f" · {link(plan, 50)}" for plan in used_by.get(page["relative"], []))
+            for page in pages
+        ]
+        lines.extend(_folded("Pages", page_lines or ["_None._"]))
 
-        lines.extend(["", "## Recent knowledge", ""])
         newest_entries = sorted(
             context.entries, key=lambda entry: str(entry.get("created_at") or ""), reverse=True
         )[:HOME_KNOWLEDGE_LIMIT]
-        lines.extend(_entry_line(entry, "Home.md") for entry in newest_entries)
-        if not newest_entries:
-            lines.append("_None._")
-
-        lines.extend(["", "## Recently completed (14 days)", ""])
-        cutoff = now - timedelta(days=14)
-        completed = [
-            item
-            for item in overviews
-            if item["status"] == "completed"
-            and item["completed_at"]
-            and parse_time(item["completed_at"]) >= cutoff
-        ]
-        completed.sort(key=lambda item: item["completed_at"], reverse=True)
-        for plan in completed:
-            date = _date_only(plan["completed_at"])
-            lines.append(f"- {link(plan)} · {date.isoformat() if date else ''}".rstrip(" ·"))
-        if not completed:
-            lines.append("_None._")
+        knowledge = [_entry_line(entry, "Home.md") for entry in newest_entries]
+        lines.extend(_folded("Knowledge", knowledge or ["_None._"]))
         lines.extend(
             [
                 "",
@@ -2024,6 +2091,241 @@ class NotesBridge:
             ]
         )
         return _tidy(lines)
+
+    def _home_work(
+        self,
+        open_plans: list[dict[str, Any]],
+        context: _Context,
+        link: Any,
+    ) -> list[str]:
+        """Open plans and todos by topic: progress, unlinked todos and what comes next."""
+        todos = context.todos
+        lines = ["", "## Current work", ""]
+        if todos is not None:
+            counts = todos.counts()
+            lines.extend(
+                [
+                    f"{file_link(todos.file)} · {counts['open']} open · "
+                    f"{counts['linked']} linked to plans · {counts['done']} done",
+                    "",
+                ]
+            )
+        topics: dict[str, dict[str, list[Any]]] = {}
+
+        def bucket(name: str) -> dict[str, list[Any]]:
+            return topics.setdefault(name, {"plans": [], "items": []})
+
+        for plan in open_plans:
+            # With no topics configured, plans keep their workspace grouping.
+            fallback = OTHER_TOPIC if context.topics else str(plan["workspace"])
+            bucket(plan.get("primary_topic") or fallback)["plans"].append(plan)
+        if todos is not None:
+            for index, item in enumerate(todos.items):
+                if item.state != "cancelled":
+                    bucket(context.todo_topics[index])["items"].append(index)
+
+        def open_items(name: str) -> list[int]:
+            if todos is None:
+                return []
+            return [index for index in topics[name]["items"] if todos.items[index].open]
+
+        shown = [name for name in topics if topics[name]["plans"] or open_items(name)]
+        if not shown:
+            return [*lines, "_Nothing open._"]
+        order = {name: position for position, name in enumerate(context.topics)}
+
+        def newest(name: str) -> str:
+            days = [str(plan["last_event_at"] or "")[:10] for plan in topics[name]["plans"]]
+            days += [context.todo_dates[index] for index in open_items(name)]
+            return max(days, default="")
+
+        shown.sort(key=lambda name: (order.get(name, len(order)), name))
+        shown.sort(key=newest, reverse=True)
+        shown.sort(key=lambda name: name == OTHER_TOPIC)
+        for name in shown:
+            lines.extend([f"### {name}", ""])
+            plans = sorted(
+                topics[name]["plans"], key=lambda item: item["last_event_at"] or "", reverse=True
+            )
+            plans.sort(key=lambda item: item["status"] != "active")
+            if plans:
+                lines.extend(
+                    [
+                        "| Plan | Status | Todos | Tasks | Next | Last activity |",
+                        "|---|---|---|---|---|---|",
+                    ]
+                )
+            for plan in plans:
+                last = _date_only(plan["last_event_at"])
+                idle = plan["idle_days"]
+                last_text = last.isoformat() if last else ""
+                if last and idle is not None:
+                    last_text += f" ({idle}d)"
+                cells = [
+                    link(plan),
+                    _plan_status_cell(plan),
+                    _ratio(plan.get("todos_done", 0), plan.get("todos_total", 0)),
+                    _ratio(plan["tasks_done"], plan["tasks_total"]),
+                    _next_cell(plan),
+                    last_text,
+                ]
+                lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")
+            if plans:
+                lines.append("")
+            if todos is None:
+                continue
+            unlinked = [
+                index
+                for index in topics[name]["items"]
+                if _item_plan(context, todos.items[index]) is None
+            ]
+            unlinked_open = [index for index in unlinked if todos.items[index].open]
+            if unlinked_open:
+                inbox = sum(todos.items[index].in_inbox for index in unlinked_open)
+                parts = [f"{len(unlinked_open)} open"]
+                if inbox:
+                    parts.append(f"{inbox} in {context.todo_inbox}")
+                by_heading: dict[str, list[int]] = {}
+                anchors: dict[str, str | None] = {}
+                for index in unlinked:
+                    item = todos.items[index]
+                    if not item.headings or item.in_inbox:
+                        continue
+                    heading = item.headings[0]
+                    by_heading.setdefault(heading, []).append(index)
+                    if len(item.headings) == 1 and item.anchor and heading not in anchors:
+                        anchors[heading] = item.anchor
+                for heading, group in by_heading.items():
+                    done = sum(todos.items[index].state == "done" for index in group)
+                    label = re.sub(r"[\[\]|#]", " ", heading).strip() or heading
+                    heading_ref = file_link(todos.file, label, anchors.get(heading))
+                    parts.append(f"{heading_ref} {done}/{len(group)} done")
+                lines.extend(["Not linked to a plan: " + " · ".join(parts), ""])
+            upcoming = [
+                index
+                for index in open_items(name)
+                if _todo_safe(todos.items[index])
+                and _open_parent(todos, todos.items[index]) is None
+            ]
+            upcoming.sort(key=lambda index: context.todo_dates[index], reverse=True)
+            if upcoming:
+                lines.append("**Next:**")
+                lines.extend(
+                    _todo_line(context, index, context.todo_dates[index], "Home.md")
+                    for index in upcoming[:HOME_TOPIC_NEXT]
+                )
+                lines.append("")
+        return lines
+
+    def _home_achieved(
+        self,
+        overviews: list[dict[str, Any]],
+        now: datetime,
+        context: _Context,
+        events: list[dict[str, Any]],
+    ) -> list[str]:
+        """What got done: a weekly table, then the last two weeks' ticked todos and tasks."""
+        today = now.date()
+        starts = _week_starts(today, ACHIEVED_WEEKS)
+
+        def week_of(day: date | None) -> int | None:
+            if day is None:
+                return None
+            for position, start in enumerate(starts):
+                if start <= day < start + timedelta(days=7):
+                    return position
+            return None
+
+        table = [[0, 0, 0, 0] for _ in starts]
+
+        def add(day: date | None, column: int) -> None:
+            position = week_of(day)
+            if position is not None:
+                table[position][column] += 1
+
+        for record in context.done_seen.values():
+            when = record.get("date")
+            if isinstance(when, str):
+                with contextlib.suppress(ValueError):
+                    add(date.fromisoformat(when), 0)
+        for event in events:
+            if event.get("type") == "task_completed":
+                add(_date_only(event.get("occurred_at")), 1)
+        for plan in overviews:
+            if plan["status"] == "completed":
+                add(_date_only(plan["completed_at"]), 2)
+        for doc in context.docs:
+            if doc["kind"] == "page":
+                add(doc["modified"], 3)
+        lines = [
+            "",
+            "## Achieved",
+            "",
+            "| Week | Todos ticked | Tasks done | Plans done | Pages |",
+            "|---|---|---|---|---|",
+        ]
+        for start, row in zip(starts, table, strict=True):
+            label = f"{start.isocalendar().week:02d} · from {start.isoformat()}"
+            if start == starts[0]:
+                label += " (this week)"
+            lines.append(f"| {label} | " + " | ".join(str(cell) for cell in row) + " |")
+        cutoff = (today - timedelta(days=ACHIEVED_DAYS)).isoformat()
+
+        todos = context.todos
+        if todos is not None:
+            ticked = [
+                (str(record["date"]), index)
+                for index, item in enumerate(todos.items)
+                if item.state == "done"
+                and _todo_safe(item)
+                and isinstance(record := context.done_seen.get(item.key) or {}, dict)
+                and isinstance(record.get("date"), str)
+                and record["date"] >= cutoff
+            ]
+            ticked.sort(key=lambda pair: pair[0], reverse=True)
+            present = {item.key for item in todos.items}
+            removed = sum(
+                1
+                for key, record in context.done_seen.items()
+                if key not in present and str(record.get("date") or "") >= cutoff
+            )
+            lines.extend(["", f"### Todos ticked ({ACHIEVED_DAYS} days)", ""])
+            lines.extend(
+                _todo_line(context, index, day, "Home.md")
+                for day, index in ticked[:HOME_TICKED_LIMIT]
+            )
+            if len(ticked) > HOME_TICKED_LIMIT:
+                lines.append(f"- _{len(ticked) - HOME_TICKED_LIMIT} more_")
+            if removed:
+                lines.append(f"- _{_count(removed, 'ticked item')} since removed from the list_")
+            if not ticked and not removed:
+                lines.append(
+                    "_None yet. agops dates an item on the first sync that sees it ticked._"
+                )
+
+        done_lines: list[tuple[str, str]] = []
+        since = now - timedelta(days=ACHIEVED_DAYS)
+        for event in events:
+            if event.get("type") != "task_completed" or parse_time(event["occurred_at"]) < since:
+                continue
+            line = self._event_line(event, context, "Home.md")
+            if line:
+                done_lines.append((str(event["occurred_at"]), line))
+        for plan in overviews:
+            completed = plan["completed_at"] if plan["status"] == "completed" else None
+            if completed and parse_time(completed) >= since:
+                label = _link(plan["title"], "Home.md", plan["note_path"])
+                done_lines.append(
+                    (str(completed), f"- {_date_only(completed)} · {label} · plan completed")
+                )
+        done_lines.sort(key=lambda pair: pair[0], reverse=True)
+        lines.extend(["", f"### Tasks and plans done ({ACHIEVED_DAYS} days)", ""])
+        lines.extend(line for _, line in done_lines[:HOME_DONE_LIMIT])
+        if len(done_lines) > HOME_DONE_LIMIT:
+            lines.append(f"- _{len(done_lines) - HOME_DONE_LIMIT} more in [[Activity]]_")
+        if not done_lines:
+            lines.append("_None._")
+        return lines
 
     def _event_lines(
         self, events: list[dict[str, Any]], context: _Context, from_note: str
@@ -2781,6 +3083,9 @@ class NotesBridge:
                 execution_plan = load_plan(self.hub.root, plan_id, plan_state.approved_revision)
             overview = _plan_overview(plan, plan_state, execution_plan, projects, now)
             overview["topics"] = _topics(context.topics, overview["projects"], str(plan["title"]))
+            overview["primary_topic"] = _primary_topic(
+                context.topics, overview["projects"], f"{plan['title']}\n{plan_id}"
+            )
             overview["docs"] = context.plan_docs(plan)
             context.plans[plan_id] = overview
             loaded.append((plan, plan_state, execution_plan, overview))
@@ -2791,6 +3096,20 @@ class NotesBridge:
             known = (sidecar.get("todos") or {}).get("first_seen") or {}
             first_seen = context.todos.first_seen(known, now.date().isoformat())
             context.todo_dates = context.todos.dates(first_seen, now.date().isoformat())
+            context.todo_topics = [_todo_topic(context, item) for item in context.todos.items]
+            known_done = (sidecar.get("todos") or {}).get("done_seen")
+            context.done_seen = context.todos.done_seen(
+                known_done if isinstance(known_done, dict) else None,
+                now.date().isoformat(),
+                (now.date() - timedelta(days=DONE_SEEN_DAYS)).isoformat(),
+            )
+        for plan_id, overview in context.plans.items():
+            overview["todos_done"], overview["todos_total"] = plan_todo_counts(
+                context.todos, plan_id
+            )
+            successor = context.plans.get(str(overview.get("superseded_by") or ""))
+            if successor is not None:
+                successor.setdefault("replaces", []).append(plan_id)
         if settings["todos"] is not None:
             context.todo_inbox = settings["todos"]["inbox"]
         plan_list = list(state.plans)
@@ -2891,6 +3210,8 @@ class NotesBridge:
                 **context.todos.counts(),
                 # Item text hashes and dates only, for "newest first" without a source date.
                 "first_seen": first_seen,
+                # The day each item was first seen ticked, for the Achieved section.
+                "done_seen": context.done_seen,
             }
         else:
             sidecar.pop("todos", None)

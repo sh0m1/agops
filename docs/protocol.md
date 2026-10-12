@@ -18,7 +18,9 @@ are omitted from the bounded startup brief.
 Plan revisions are immutable. Agents may draft a plan or a new revision. Only the interactive CLI
 can approve a revision or cancel a plan. An approved plan is active until all tasks and acceptance
 criteria have evidence, or until it is cancelled; a draft that was never approved can be
-cancelled too, and a completed or cancelled plan cannot be cancelled again.
+cancelled too, and a completed or cancelled plan cannot be cancelled again. A cancel can name
+the plan that supersedes it (`superseded_by` in the `plan_cancelled` payload); that plan must
+exist and differ from the cancelled one.
 
 A task can be claimed only when its dependencies are complete. Claims have a 60-minute lease.
 Heartbeats and checkpoints renew the lease. An expired task may be reclaimed; updates from the old
@@ -51,7 +53,11 @@ Each configured profile may have one absolute `notes_target` in config schema ve
 notes connect TARGET` accepts only a new, empty, or already agops-managed directory and writes:
 
 - `Home.md` and `Plans.md`, overviews of open plans (drafts included), what needs a human,
-  recent events, and finished plans;
+  recent events, and finished plans. `Home.md` groups open plans and todos by their primary
+  topic (title or id keyword, then most matching projects, then `notes.yaml` order; else
+  `other`), shows linked todos done/total next to tasks done/total, and has an Achieved table of
+  the last 4 weeks. The sidecar keeps `todos.done_seen` (item text hash → first day seen ticked,
+  plan ids; no text) for it, and the first sync dates no item;
 - `plans/active/<plan-id>.md` (or `plans/archive/<workspace>/<plan-id>.md` once finished),
   containing portable frontmatter, generated state, and an excluded personal-notes region, with
   the editable definition in `plans/.definitions/<plan-id>.yaml`;

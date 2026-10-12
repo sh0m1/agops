@@ -13,8 +13,10 @@ mirrored files. Keep one stable `--session` for every command in a run (`agops s
 
 ## Map of the folder
 
-- `Home.md` — start here: tally, what needs the user (approvals, blocked, stalled, drafts),
-  open plans per workspace with their next task, the last 7 days, the newest knowledge.
+- `Home.md` — start here: tally, what needs the user (approvals, blocked, stalled, drafts,
+  Inbox), current work by topic (plans with todos done/total and tasks done/total, unlinked
+  todos by heading, the newest open todos), Achieved (4-week table, ticked todos, done tasks),
+  then folded recent events, pages and knowledge.
 - `agops.base` — Obsidian Bases views (Open plans, Stalled, By workspace, Recently
   completed, Knowledge, Decisions and preferences, Plan-linked facts). Written once; the
   user may customize it.
@@ -63,7 +65,8 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
 5. **Plans, ask:** from `plans`, list `stalled` and `blocked` plans, drafts nobody will
    approve, plus any plan you judge superseded (a later plan covers the same subject — compare titles, goals and blocked
    reasons). For each, give one line: plan, idle days, why, and the proposed action:
-   - cancel: `agops plan cancel <id> --reason "<why>" --yes`
+   - cancel: `agops plan cancel <id> --reason "<why>" --yes`, plus
+     `--superseded-by <newer-id>` when a later plan replaces it
    - keep: it is waiting on something real (name it)
    Run cancellations only after the user confirms, one list, one confirmation.
    Never cancel a plan with a `live` task. Never complete tasks without real evidence.

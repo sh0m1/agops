@@ -206,7 +206,8 @@ agops plan approve my-plan
 ```
 
 `agops plan cancel my-plan --reason "..."` retires a plan, active or still a draft; it is
-interactive like approval. Two optional task fields only change how notes read: `summary`, a
+interactive like approval. Add `--superseded-by other-plan` when a newer plan replaces it: the old
+note then links the new plan, and the new note has a `Replaces:` line. Two optional task fields only change how notes read: `summary`, a
 one-line gist shown first when the task is unfolded (otherwise the first sentences of `notes`
 or `instructions` are), and `phase`, which groups a plan note's tasks into sections in the order the
 phases first appear.
@@ -263,10 +264,23 @@ next sync retries it. When a newer revision is awaiting approval, the note lists
 approved revision and says "Revision N is waiting for approval"; the `.yaml` file holds the newer
 definition.
 
-`Home.md` is the overview: a one-line tally; what needs you (pending approvals, blocked tasks,
-stalled plans, drafts to approve or cancel); one table of open plans per workspace with status,
-progress, the next task, and last activity; the last 7 days of events; the newest knowledge; and
-recently completed work. Every plan note and `Plans.md` carry a computed `health` (`live`,
+`Home.md` is the overview, in this order:
+
+- A one-line tally.
+- **Needs you:** pending approvals, blocked tasks, stalled plans, one line with all the drafts to
+  approve or cancel, todos that link finished plans, and the Inbox count.
+- **Current work:** one section for each topic in `notes.yaml` that has open work. Each section has
+  a table of its open plans (status, linked todos done/total, tasks done/total, the next task,
+  last activity). Then a line with the todos that link no plan, by `ALL.md` heading, and the 3
+  newest open todos. A plan goes to the topic whose keyword is in its title or id, else to the
+  topic that matches the most of its projects, else to the first in `notes.yaml`. A todo goes to
+  its plan's topic, else to the topic of its headings and tags, else to that of its own words.
+  Work that matches no topic is under `other`. With no topics configured, plans are grouped by
+  workspace.
+- **Achieved:** a table of the last 4 weeks (todos ticked, tasks done, plans done, pages), the
+  todos ticked in the last 14 days, and the tasks and plans done in that time.
+- **Recent:** the last 7 days of events, the newest pages and the newest knowledge, in folded
+  callouts. Every plan note and `Plans.md` carry a computed `health` (`live`,
 `waiting`, `blocked`, `stalled` after 7 idle days, `done`, `cancelled`, or `draft`), plus its
 workspace and progress, so the vault sorts and filters instead of just listing. `agops.base` is an
 Obsidian Bases file with ready-made views (open plans including drafts, stalled, by workspace,
@@ -308,7 +322,11 @@ heading's, else the day agops first saw it. Each plan note then gets a `## Todos
 "Needs you" with the open items that link it, newest first with their dates, as plain bullets
 with a link back to their heading (never checkboxes, so you tick only in the todo file). An item's
 own links to pages and diagrams (`[flow](../agops/docs/x/flow.html)` or `[[flow.html]]`) are
-linked again after it, from the plan note's path; a link whose file is missing is left out. `Home.md` shows the counts, `agops notes
+linked again after it, from the plan note's path; a link whose file is missing is left out.
+agops dates a ticked item on the first sync that sees it ticked, and keeps only the item's text
+hash, that date and its plan ids in the sidecar (`done_seen`). The first sync dates no item, so
+old ticks do not show as new. A ticked item that you delete from the file still counts in the
+weekly table for 8 weeks. Plan notes carry `todos: done/total` in their frontmatter. `Home.md` shows the counts, `agops notes
 status` reports `todos.stale` when the file changed after the last render, `agops notes review`
 lists the Inbox (`inbox:`, default `Inbox`) and open items that link finished plans, and
 `agops brief` lists up to 10 open items that link open plans (the current project's plans

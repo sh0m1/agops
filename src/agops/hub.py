@@ -302,12 +302,20 @@ class Hub:
 
         return self._mutate(operation)
 
-    def cancel_plan(self, plan_id: str, reason: str) -> dict[str, Any]:
+    def cancel_plan(
+        self, plan_id: str, reason: str, superseded_by: str | None = None
+    ) -> dict[str, Any]:
         plan_id = slug(plan_id)
         validate_content(reason, "reason.md")
+        if superseded_by is not None:
+            superseded_by = slug(superseded_by)
+            if superseded_by == plan_id:
+                raise ValueError("A plan cannot supersede itself")
 
         def operation(state: State) -> tuple[dict[str, Any], str]:
             load_plan(self.root, plan_id)  # an unknown plan raises here
+            if superseded_by is not None:
+                load_plan(self.root, superseded_by)
             plan_state = state.plans.get(plan_id) or PlanState(plan_id)
             # A draft can be cancelled too: it is the only way to retire a plan never approved.
             if plan_state.completed or plan_state.cancelled:
@@ -316,7 +324,10 @@ class Hub:
             if any(task.actively_claimed() for task in plan_state.tasks.values()):
                 raise ValueError("Release active task claims before cancelling the plan")
             event = self._base_event("plan_cancelled", "human", "interactive")
-            event.update({"plan_id": plan_id, "payload": {"reason": reason}})
+            payload: dict[str, Any] = {"reason": reason}
+            if superseded_by is not None:
+                payload["superseded_by"] = superseded_by
+            event.update({"plan_id": plan_id, "payload": payload})
             return event, f"hub: cancel plan {plan_id}"
 
         return self._mutate(operation)

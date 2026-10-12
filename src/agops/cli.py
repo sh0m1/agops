@@ -156,6 +156,7 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     cancel = plan_commands.add_parser("cancel")
     cancel.add_argument("plan_id")
     cancel.add_argument("--reason", required=True)
+    cancel.add_argument("--superseded-by", help="the plan that replaces this one")
     cancel.add_argument("--yes", action="store_true")
     plan_commands.add_parser("list")
     show = plan_commands.add_parser("show")
@@ -330,7 +331,7 @@ def dispatch(args: argparse.Namespace) -> Any:
             if os.environ.get("AGOPS_AGENT_SESSION"):
                 raise ValueError("Plan cancellation is unavailable inside an agent session")
             require_human_confirmation(args.plan_id, args.yes, "cancel")
-            return hub.cancel_plan(args.plan_id, args.reason)
+            return hub.cancel_plan(args.plan_id, args.reason, args.superseded_by)
         if args.plan_command == "list":
             return hub.list_plans()
         return load_plan(hub.root, args.plan_id, args.revision)

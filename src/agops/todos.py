@@ -123,6 +123,40 @@ class TodoList:
             item.key: known.get(item.key, today) for item in self.items if item.date is None
         }
 
+    def done_seen(
+        self, known: dict[str, Any] | None, today: str, keep_after: str
+    ) -> dict[str, dict[str, Any]]:
+        """The day agops first saw each item ticked: key → {date, plans}.
+
+        With no earlier map (`known` is None), the items already ticked get no date, so a
+        first sync does not show them as ticked today. A ticked item that later leaves the
+        file keeps its entry until its date is before `keep_after`, so the weekly counts
+        stay; an item that is open again loses its entry.
+        """
+        first = known is None
+        previous = {
+            key: value
+            for key, value in (known or {}).items()
+            if isinstance(key, str) and isinstance(value, dict)
+        }
+        result: dict[str, dict[str, Any]] = {}
+        present = {item.key for item in self.items}
+        for item in self.items:
+            if item.state != "done" or not item.key:
+                continue
+            old = previous.get(item.key)
+            if old is not None:
+                result[item.key] = {"date": old.get("date"), "plans": list(item.plans)}
+            else:
+                result[item.key] = {"date": None if first else today, "plans": list(item.plans)}
+        for key, value in previous.items():
+            when = value.get("date")
+            if key in present or not isinstance(when, str) or when < keep_after:
+                continue
+            plans = value.get("plans")
+            result[key] = {"date": when, "plans": plans if isinstance(plans, list) else []}
+        return result
+
     def counts(self) -> dict[str, int]:
         open_items = [item for item in self.items if item.open]
         return {

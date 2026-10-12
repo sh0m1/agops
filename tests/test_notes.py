@@ -18,13 +18,14 @@ from agops.notes import (
     PREVIOUS_AGOPS_BASE,
     RETIRE_MIN_AGE_DAYS,
     NotesBridge,
+    _primary_topic,
     hub_fingerprint,
     link_plan,
     plan_health,
     plan_workspace,
     project_workspace,
 )
-from agops.state import PlanState, TaskState, load_plan
+from agops.state import PlanState, TaskState, load_plan, load_state
 
 
 def _connected(hub: Hub, target: Path) -> NotesBridge:
@@ -689,8 +690,9 @@ def test_plans_and_home_show_workspace_health_and_activity(
 
     home_text = (tmp_path / "vault" / "Home.md").read_text(encoding="utf-8")
     assert "1 active · 1 live" in home_text
-    assert "| [Shared plan](plans/active/shared-plan.md) | live | 0/2 | `first` First task |" in (
-        home_text
+    assert (
+        "| [Shared plan](plans/active/shared-plan.md) | live | — | 0/2 | `first` First task |"
+        in home_text
     )
     assert "[[agops.base|Views]]" in home_text
 
@@ -864,8 +866,8 @@ def test_new_plan_renders_under_active_and_is_linked_from_indexes(
     assert _vault_note(tmp_path, "plans/active/shared-plan.md").is_file()
     assert not _vault_note(tmp_path, "plans/shared-plan.md").exists()
     home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
-    assert "- Approve or cancel the draft: [Shared plan](plans/active/shared-plan.md)" in home
-    assert "| draft | 0/2 | `first` First task |" in home
+    assert "- 1 draft plan to approve or cancel: [Shared plan](plans/active/shared-plan.md)" in home
+    assert "| draft | — | 0/2 | `first` First task |" in home
     plans_text = _vault_note(tmp_path, "Plans.md").read_text(encoding="utf-8")
     assert "[Shared plan](plans/active/shared-plan.md)" in plans_text
     sidecar = json.loads(_vault_note(tmp_path, ".agops-notes.json").read_text())
@@ -1006,7 +1008,7 @@ def test_home_groups_active_plans_by_workspace(
     hub.approve_plan("second-plan")
     _connected(hub, tmp_path / "vault")
     home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
-    section = home.split("## Plans")[1].split("## Last 7 days")[0]
+    section = home.split("## Current work")[1].split("## Achieved")[0]
     assert "### Acme" in section and "### Globex" in section
     assert "(plans/active/second-plan.md)" in section
 
@@ -1024,7 +1026,7 @@ def test_plan_note_reads_like_a_page(
     hub.checkpoint_task("shared-plan", "first", "codex", "session-one", "Half way " + "x" * 300, [])
     text = _vault_note(tmp_path, "plans/active/shared-plan.md").read_text(encoding="utf-8")
 
-    assert "live · Acme · 0/2 done · last " in text
+    assert "live · Acme · 0/2 tasks done · last " in text
     assert "## Needs you\n\n_Nothing._" in text
     assert "### In progress (1)\n\n> [!tip]- `first` First task — claimed by codex" in text
     assert "> [!todo]- `second` Second task — after `first`" in text
@@ -1192,13 +1194,13 @@ def test_home_and_activity_show_recent_events(
     )
     _connected(hub, tmp_path / "vault")
     home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
-    recent = home.split("## Last 7 days")[1].split("## Recent knowledge")[0]
+    recent = home.split("> [!info]- Last 7 days")[1].split("> [!info]- Pages")[0]
     assert "[Shared plan](plans/active/shared-plan.md) · revision 1 drafted" in recent
     # Two same-day revisions of one entry are one line, and it was new that day.
     assert recent.count("knowledge added: [Testing](knowledge/global/testing.md) · fact") == 1
     assert "knowledge updated" not in recent
-    newest = home.split("## Recent knowledge")[1]
-    assert "- [Testing](knowledge/global/testing.md) · fact · " in newest
+    newest = home.split("> [!info]- Knowledge")[1]
+    assert "> - [Testing](knowledge/global/testing.md) · fact · " in newest
     activity = _vault_note(tmp_path, "Activity.md").read_text(encoding="utf-8")
     assert "## Last 30 days" in activity and "· revision 1 drafted" in activity
 
@@ -1321,7 +1323,7 @@ def test_docs_folders_are_mirrored_read_only_and_linked_from_plans(
     assert "- [board (draw.io)](docs/reference/board.drawio) · diagram" in index
     assert "- [2026-10-02-other](docs/reference/pages/2026-10-02-other.html) · page" in index
     home = (vault / "Home.md").read_text(encoding="utf-8")
-    recent = home.split("## Recent pages")[1].split("## Recent knowledge")[0]
+    recent = home.split("> [!info]- Pages")[1].split("> [!info]- Knowledge")[0]
     assert "[Flow & map](docs/reference/workstreams/shared-plan-flow.html) · " in recent
     assert "· [Shared plan](plans/active/shared-plan.md)" in recent
     assert "[2026-10-02-other](docs/reference/pages/2026-10-02-other.html)" in recent
@@ -1415,7 +1417,7 @@ def test_cancelled_draft_leaves_home_and_moves_to_archive(
     _connected(hub, tmp_path / "vault")
     hub.cancel_plan("shared-plan", "superseded")
     home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
-    assert "Approve or cancel" not in home and "## Plans\n\n_None._" in home
+    assert "approve or cancel" not in home and "## Current work\n\n_Nothing open._" in home
     assert "· cancelled — superseded" in home
     assert next((tmp_path / "vault" / "plans" / "archive").rglob("shared-plan.md")).is_file()
 
@@ -1503,10 +1505,8 @@ def test_plan_note_lists_linked_open_todos_without_checkboxes(
     assert "Not linked" not in section and "release the module" not in section
 
     home = (tmp_path / "vault" / "agops" / "Home.md").read_text(encoding="utf-8")
-    assert (
-        "## Todos\n\n[[Todo/ALL|ALL]] · 4 open · 1 in [[Todo/ALL#Inbox|Inbox]] · "
-        "3 linked to plans · 2 done"
-    ) in home
+    assert "## Current work\n\n[[Todo/ALL|ALL]] · 4 open · 3 linked to plans · 2 done" in home
+    assert "- 1 todo in [[Todo/ALL#Inbox|Inbox]] to sort or link" in home
     sidecar = json.loads((tmp_path / "vault" / "agops" / ".agops-notes.json").read_text())
     assert sidecar["todos"]["file"] == "Todo/ALL.md" and sidecar["todos"]["open"] == 4
     assert set(sidecar["todos"]["first_seen"].values()) == {today}
@@ -1756,3 +1756,97 @@ def test_todo_page_links_are_relinked_from_the_plan_note(
         "[the flow](../../docs/reference/workstreams/flow.html) · "
         "[board.drawio](../../docs/reference/board.drawio) · [[Todo/ALL#Inbox|ALL › Inbox]]"
     ) in section
+
+
+def test_primary_topic_prefers_the_title_then_the_most_projects() -> None:
+    rules = {
+        "airflow": {"projects": ["*airflow*"], "keywords": ["airflow"]},
+        "networking": {"projects": ["*-nlb", "*-vpc"], "keywords": ["network"]},
+        "ciam": {"projects": ["*auth0*"], "keywords": ["oauth"]},
+    }
+    assert _primary_topic(rules, ["x-auth0", "x-nlb", "x-vpc"], "Harden ingress") == "networking"
+    assert _primary_topic(rules, ["x-auth0", "y-auth0"], "Airflow delegation") == "airflow"
+    assert _primary_topic(rules, ["x-auth0", "x-nlb"], "Ingress") == "networking"  # config order
+    assert _primary_topic(rules, [], "Write the docs") is None
+
+
+def test_cancel_names_the_plan_that_supersedes_it(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    second = tmp_path / "second.yaml"
+    second.write_text(
+        plan_file.read_text(encoding="utf-8")
+        .replace("shared-plan", "second-plan")
+        .replace("Shared plan", "Second plan"),
+        encoding="utf-8",
+    )
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    hub.draft_plan(second, "codex", "one")
+    with pytest.raises(ValueError, match="cannot supersede itself"):
+        hub.cancel_plan("shared-plan", "loop", superseded_by="shared-plan")
+    with pytest.raises(ValueError, match="Unknown plan"):
+        hub.cancel_plan("shared-plan", "gone", superseded_by="missing-plan")
+    event = hub.cancel_plan("shared-plan", "replaced", superseded_by="second-plan")
+    assert event["payload"] == {"reason": "replaced", "superseded_by": "second-plan"}
+    assert load_state(hub.root).plans["shared-plan"].superseded_by == "second-plan"
+
+    _connected(hub, tmp_path / "vault")
+    old = next((tmp_path / "vault" / "plans" / "archive").rglob("shared-plan.md"))
+    old_text = old.read_text(encoding="utf-8")
+    assert "superseded by [Second plan](../../active/second-plan.md)" in old_text
+    archived = old.relative_to(tmp_path / "vault" / "plans").as_posix()
+    new_text = _vault_note(tmp_path, "plans/active/second-plan.md").read_text(encoding="utf-8")
+    assert f"**Replaces:** [Shared plan](../{archived})" in new_text
+    index = _vault_note(tmp_path, "Plans.md").read_text(encoding="utf-8")
+    assert "· superseded by [Second plan](plans/active/second-plan.md)" in index
+    home = _vault_note(tmp_path, "Home.md").read_text(encoding="utf-8")
+    assert "Shared plan](plans/" not in home.split("## Achieved")[0]
+
+
+def test_home_groups_work_by_topic_and_dates_ticked_todos(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _todo_vault(hub, tmp_path, todos=None)
+    agops = tmp_path / "vault" / "agops"
+    (agops / "notes.yaml").write_text(
+        "todos:\n  file: Todo/ALL.md\n"
+        "topics:\n"
+        "  widgets:\n    projects: [acme-*]\n"
+        "  egress:\n    keywords: [egress]\n",
+        encoding="utf-8",
+    )
+    bridge.render_all()
+    today = datetime.now(UTC).date().isoformat()
+    home = (agops / "Home.md").read_text(encoding="utf-8")
+    work = home.split("## Current work")[1].split("## Achieved")[0]
+    # Todos: 5 items link the plan (children inherit the link), 2 of them ticked.
+    assert "| [Shared plan](plans/active/shared-plan.md) | draft | 2/5 | 0/2 |" in work
+    assert work.index("### widgets") < work.index("### egress")
+    assert "Not linked to a plan: 1 open · [[Todo/ALL#Platform|Platform]] 0/1 done" in work
+    assert (
+        f"- {today} · Roll out the rule · [Shared plan](plans/active/shared-plan.md)" in work
+    )
+    assert "- 1 draft plan to approve or cancel: [Shared plan]" in home
+    assert "todos: 2/5" in _plan_note(tmp_path)
+    # The first sync dates nothing: the items ticked before it are not "ticked today".
+    assert "_None yet." in home
+    sidecar = json.loads((agops / ".agops-notes.json").read_text(encoding="utf-8"))
+    assert [record["date"] for record in sidecar["todos"]["done_seen"].values()] == [None, None]
+
+    todo_file = tmp_path / "vault" / "Todo" / "ALL.md"
+    todo_file.write_text(TODO_TEXT.replace("- [ ] Not linked", "- [x] Not linked"))
+    bridge.render_all()
+    home = (agops / "Home.md").read_text(encoding="utf-8")
+    assert f"- {today} · Not linked · [[Todo/ALL#Platform|ALL › Platform › #egress]]" in home
+    assert "(this week) | 1 | 0 | 0 | 0 |" in home
+
+    todo_file.write_text(TODO_TEXT.replace("- [ ] Not linked\n", ""))
+    bridge.render_all()
+    home = (agops / "Home.md").read_text(encoding="utf-8")
+    assert "- _1 ticked item since removed from the list_" in home
+    assert "(this week) | 1 | 0 | 0 | 0 |" in home
+    sidecar_text = (agops / ".agops-notes.json").read_text(encoding="utf-8")
+    assert "Not linked" not in sidecar_text and "Roll out" not in sidecar_text

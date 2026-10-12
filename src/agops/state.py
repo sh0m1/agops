@@ -50,6 +50,7 @@ class PlanState:
     last_event_at: str | None = None
     completed_at: str | None = None
     cancelled_at: str | None = None
+    superseded_by: str | None = None
 
     @property
     def active(self) -> bool:
@@ -92,6 +93,7 @@ class State:
         if kind == "plan_cancelled":
             plan.cancelled = True
             plan.cancelled_at = occurred_at
+            plan.superseded_by = payload.get("superseded_by")
             return
         task_id = event.get("task_id")
         if not task_id:

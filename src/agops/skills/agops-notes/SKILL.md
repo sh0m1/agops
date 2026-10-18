@@ -100,4 +100,6 @@ and idle 7+ days), `done`, `cancelled`, `draft`.
 - When you make a page or diagram for a todo item, add a Markdown link to its vault copy
   (`docs/<folder>/...`, relative to the todo file) at the end of that item's line. Change
   nothing else on the line. The plan note then links it next to the item.
+- A page for a plan or task goes through `agops page add <file> --plan <id> [--task <id>]`
+  (not a hand copy): it tags the page, syncs, and prints the vault path to cite in the checkpoint.
 - In Obsidian: pin `Home.md`, open `agops.base` for sortable tables, filter by tag `agops`.

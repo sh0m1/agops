@@ -62,6 +62,14 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     notes_resolve.add_argument("--take", required=True, choices=("notes", "agops"))
     notes_resolve.add_argument("--yes", action="store_true")
     notes_commands.add_parser("disconnect")
+    page = commands.add_parser("page")
+    page_commands = page.add_subparsers(dest="page_command", required=True)
+    page_add = page_commands.add_parser("add")
+    page_add.add_argument("file")
+    page_add.add_argument("--plan", required=True)
+    page_add.add_argument("--task")
+    page_add.add_argument("--title")
+    page_add.add_argument("--slug")
     session_parser = commands.add_parser("session")
     session_parser.add_argument("--actor", default="agent")
     session_parser.add_argument("--value", action="store_true")
@@ -284,6 +292,10 @@ def dispatch(args: argparse.Namespace) -> Any:
             return result
         require_human_confirmation(args.plan_id, args.yes, "resolve", noun="plan")
         return bridge.resolve(args.plan_id, args.take, actor, session)
+    if args.command == "page":
+        return NotesBridge(hub).add_page(
+            Path(args.file), args.plan, args.task, args.title, args.slug
+        )
     if args.command == "brief":
         return hub.brief(
             Path(args.cwd),

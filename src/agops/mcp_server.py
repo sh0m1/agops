@@ -7,6 +7,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .hub import Hub
+from .notes import NotesBridge
 from .state import load_plan
 
 SESSION = os.environ.get("AGOPS_SESSION", str(uuid.uuid4()))
@@ -76,7 +77,10 @@ def hub_claim_task(plan_id: str, task_id: str, cwd: str = ".") -> dict:
 def hub_checkpoint_task(
     plan_id: str, task_id: str, summary: str, evidence: list[str] | None = None
 ) -> dict:
-    """Publish a progress checkpoint and renew the task lease."""
+    """Publish a progress checkpoint and renew the task lease.
+
+    Cite any page made for the task (the path hub_add_page returns) in the evidence.
+    """
     return hub().checkpoint_task(plan_id, task_id, ACTOR, SESSION, summary, evidence or [])
 
 
@@ -132,6 +136,21 @@ def hub_add_knowledge(
 ) -> dict:
     """Add a versioned knowledge entry after secret and size validation."""
     return hub().add_knowledge(scope, key, title, body, ACTOR, SESSION, supersedes, kind=kind)
+
+
+@mcp.tool()
+def hub_add_page(
+    file_path: str,
+    plan_id: str,
+    task_id: str | None = None,
+    title: str | None = None,
+    slug: str | None = None,
+) -> dict:
+    """Store a self-contained HTML page for a plan (and task), tag it, and link it in the notes.
+
+    Returns the stored path and the vault path. Cite the vault path in the task checkpoint.
+    """
+    return NotesBridge(hub()).add_page(Path(file_path), plan_id, task_id, title, slug)
 
 
 def main() -> None:

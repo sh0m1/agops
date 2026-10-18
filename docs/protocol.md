@@ -68,7 +68,9 @@ notes connect TARGET` accepts only a new, empty, or already agops-managed direct
 - `docs/<folder>/...`, read-only copies of the folders listed under `docs:` in `notes.yaml`
   (Markdown docs, HTML pages, and images and `.drawio` files as diagrams). A plan note links
   those named after its id (the longest matching id wins), those its definition mentions by
-  path, and pages with `<meta name="agops-plan" content="<plan-id>">`;
+  path, and pages with `<meta name="agops-plan" content="<plan-id>">` (plus
+  `<meta name="agops-task" content="<task-id>">` to show on the task). `agops page add` or the
+  MCP tool `hub_add_page` stores and tags a page; `agops brief` lists a plan's newest pages;
 - `notes.yaml`, user-owned settings (docs folders, topic rules and an optional todo file),
   written once as a template and never rewritten; and
 - `.agops-notes.json`, a format-versioned semantic baseline, which also records the hash of each

@@ -41,6 +41,8 @@ def test_managed_instructions_require_a_model_declaration() -> None:
     assert "model id" in INSTRUCTIONS
     assert "hub_get_brief" in INSTRUCTIONS
     assert "matching your tier" in INSTRUCTIONS
+    assert "## Pages" in INSTRUCTIONS
+    assert "agops page add" in INSTRUCTIONS and "hub_add_page" in INSTRUCTIONS
 
 
 # --- end-to-end setup() against a fake home -------------------------------------------------

@@ -58,6 +58,14 @@ path exists, the available one is scoped or authenticated wrong, it fails, or it
 question. Falling back to the browser is expected and fine — do not keep fighting a CLI that
 clearly will not work. When you do fall back, state in one line why the CLI or MCP route was not
 enough.
+
+## Pages
+
+Make an HTML page only for plans, architecture, reviews and multi-step debugging reports, not
+for one-line fixes or status. Write one self-contained file with inline SVG or Mermaid and no
+build step. Register it with `agops page add <file> --plan <id> [--task <id>]` (MCP
+`hub_add_page`) and cite the path it prints in the task checkpoint. Claude also saves its
+Artifact HTML to a file, registers it, then publishes the Artifact.
 {MANAGED_END}
 """
 

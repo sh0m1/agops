@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from agops.hub import Hub
 from agops.notes import (
     AGOPS_BASE,
     LEGACY_AGOPS_BASE,
+    MAX_DOC_BYTES,
     PERSONAL_START,
     PREVIOUS_AGOPS_BASE,
     RETIRE_MIN_AGE_DAYS,
@@ -1850,3 +1852,97 @@ def test_home_groups_work_by_topic_and_dates_ticked_todos(
     assert "(this week) | 1 | 0 | 0 | 0 |" in home
     sidecar_text = (agops / ".agops-notes.json").read_text(encoding="utf-8")
     assert "Not linked" not in sidecar_text and "Roll out" not in sidecar_text
+
+
+def _pages_vault(hub: Hub, tmp_path: Path, name: str = "pages") -> tuple[NotesBridge, Path]:
+    pages = tmp_path / name
+    bridge = _connected(hub, tmp_path / "vault")
+    settings = tmp_path / "vault" / "notes.yaml"
+    settings.write_text(f"docs:\n  - {pages}\n", encoding="utf-8")
+    return bridge, pages
+
+
+def test_page_add_copies_tags_links_and_lists_in_brief(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge, pages = _pages_vault(hub, tmp_path)
+    source = tmp_path / "draft.html"
+    source.write_text(
+        '<html><head><meta name="agops-plan" content="old-plan"><title>Flow</title></head>'
+        '<body><script src="https://cdn.example/x.js"></script></body></html>'
+    )
+
+    result = bridge.add_page(source, "shared-plan", "first", None, "flow")
+
+    stored = pages / "shared-plan-flow.html"
+    assert result["page"] == str(stored)
+    text = stored.read_text(encoding="utf-8")
+    assert 'content="shared-plan"' in text and "old-plan" not in text
+    assert '<meta name="agops-task" content="first">' in text
+    assert result["vault_path"] == str(tmp_path / "vault" / "docs" / "pages" / stored.name)
+    assert Path(result["vault_path"]).is_file()
+    assert any("remote script" in warning for warning in result["warnings"])
+    note = (tmp_path / "vault" / "plans" / "active" / "shared-plan.md").read_text("utf-8")
+    link = "[Flow](../../docs/pages/shared-plan-flow.html)"
+    assert f"**Pages:** {link}" in note
+    first = note.split("`first`", 1)[1].split("`second`", 1)[0]
+    assert f"- **Pages:** {link}" in first  # the task callout links it too
+    assert link not in note.split("`second`", 1)[1].split("## ", 1)[0]
+    hub.approve_plan("shared-plan")
+    brief = hub.brief(tmp_path)
+    assert f"Page: Flow — {result['vault_path']}" in brief
+
+    # Registering again replaces the page instead of adding a second one.
+    bridge.add_page(source, "shared-plan", None, "Flow v2", "flow")
+    assert len(list(pages.glob("*.html"))) == 1
+    assert "<title>Flow v2</title>" in stored.read_text(encoding="utf-8")
+    assert 'name="agops-task"' not in stored.read_text(encoding="utf-8")
+
+
+def test_page_add_rejects_bad_input_and_brief_caps_pages(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge, pages = _pages_vault(hub, tmp_path)
+    text = tmp_path / "notes.txt"
+    text.write_text("<p>x</p>")
+    with pytest.raises(ValueError, match="must be an existing .html"):
+        bridge.add_page(text, "shared-plan")
+    page = tmp_path / "ok.html"
+    page.write_text("<title>Ok</title>")
+    with pytest.raises(ValueError, match="Unknown plan"):
+        bridge.add_page(page, "nope")
+    with pytest.raises(ValueError, match="Unknown task"):
+        bridge.add_page(page, "shared-plan", "missing")
+    big = tmp_path / "big.html"
+    big.write_bytes(b"x" * (MAX_DOC_BYTES + 1))
+    with pytest.raises(ValueError, match="larger than"):
+        bridge.add_page(big, "shared-plan")
+    secret = tmp_path / "secret.html"
+    secret.write_text("<p>AKIA" + "B" * 16 + "</p>")
+    with pytest.raises(ValueError, match="credential"):
+        bridge.add_page(secret, "shared-plan")
+    assert not pages.exists()
+
+    for index in range(7):
+        bridge.add_page(page, "shared-plan", None, f"Page {index}", f"p{index}")
+        os.utime(pages / f"shared-plan-p{index}.html", (1_000 + index, 1_000 + index))
+    listed = bridge.recent_pages("shared-plan")
+    assert [item["title"] for item in listed] == [f"Page {n}" for n in range(6, 1, -1)]
+
+
+def test_page_add_without_a_notes_target_uses_the_agops_home(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    page = tmp_path / "ok.html"
+    page.write_text("<p>no title</p>")
+    result = NotesBridge(hub).add_page(page, "shared-plan", None, "A Title")
+    stored = fake_home / ".local" / "share" / "agops" / "pages" / "shared-plan-a-title.html"
+    assert result["page"] == str(stored) and stored.is_file()
+    assert any("No notes target" in warning for warning in result["warnings"])
+    assert "vault_path" not in result

@@ -27,6 +27,7 @@ from .config import config_path, load_profiles, save_profiles
 from .git import remote_url
 from .ids import normalize_remote, slug
 from .security import SECRET_PATTERNS, validate_content
+from .sessions import default_home
 from .state import (
     PlanState,
     State,
@@ -461,6 +462,11 @@ DOC_SUFFIXES = frozenset({".md", ".html"}) | DIAGRAM_SUFFIXES
 PAGE_SUFFIX = ".html"
 # `<meta name="agops-plan" content="plan-a plan-b">` links a page whose name is not the plan's.
 PAGE_PLAN_META = "agops-plan"
+# `<meta name="agops-task" content="task-id">` links a page to a task of its plan.
+PAGE_TASK_META = "agops-task"
+# Where `agops page add` stores pages when no `docs:` folder is named `pages`.
+DEFAULT_PAGES_DIR = Path(".local/share/agops/pages")
+BRIEF_PAGE_LIMIT = 5
 MAX_DOC_BYTES = 10 * 1024 * 1024
 # Files an earlier notes layout generated. They are removed when they still carry its markers.
 LEGACY_VIEWS = ("views/Plans.base", "views/Knowledge.base", "views/Projects.base")
@@ -569,17 +575,62 @@ def _link(text: str, from_note: str, to_note: str) -> str:
     return f"[{text}]({_href(from_note, to_note)})"
 
 
+def _meta_attrs(tag: str) -> dict[str, str]:
+    return {
+        match.group(1).lower(): match.group(2) if match.group(2) is not None else match.group(3)
+        for match in _TAG_ATTR.finditer(tag)
+    }
+
+
+def _page_meta(text: str, name: str) -> list[str]:
+    """Words in the content of the page's `<meta name="<name>" content="...">` tags."""
+    values: list[str] = []
+    for tag in _META_TAG.findall(text):
+        attrs = _meta_attrs(tag)
+        if (attrs.get("name") or "").strip().lower() == name:
+            values.extend(re.split(r"[\s,]+", html.unescape(attrs.get("content") or "")))
+    return list(dict.fromkeys(value for value in values if value))
+
+
 def _page_plans(text: str) -> list[str]:
     """Plan ids named by the page's `<meta name="agops-plan" content="...">` tags."""
-    plans: list[str] = []
-    for tag in _META_TAG.findall(text):
-        attrs = {
-            match.group(1).lower(): match.group(2) if match.group(2) is not None else match.group(3)
-            for match in _TAG_ATTR.finditer(tag)
-        }
-        if (attrs.get("name") or "").strip().lower() == PAGE_PLAN_META:
-            plans.extend(re.split(r"[\s,]+", html.unescape(attrs.get("content") or "")))
-    return list(dict.fromkeys(plan for plan in plans if plan))
+    return _page_meta(text, PAGE_PLAN_META)
+
+
+_HEAD_OPEN = re.compile(r"<head\b[^>]*>", re.IGNORECASE)
+_DOCTYPE = re.compile(r"<!doctype[^>]*>", re.IGNORECASE)
+_REMOTE_SCRIPT = re.compile(r"<script\b[^>]*\bsrc\s*=\s*[\"']?(?:https?:)?//", re.IGNORECASE)
+
+
+def _tag_page(text: str, plan_id: str, task_id: str | None, title: str | None) -> str:
+    """The page with its agops-plan (and agops-task) meta tags set, and the title if given.
+
+    Existing agops tags are replaced so a page registered twice never names two plans.
+    """
+    own = {PAGE_PLAN_META, PAGE_TASK_META}
+    text = _META_TAG.sub(
+        lambda found: ""
+        if (_meta_attrs(found.group(0)).get("name") or "").strip().lower() in own
+        else found.group(0),
+        text,
+    )
+    tags = [f'<meta name="{PAGE_PLAN_META}" content="{html.escape(plan_id)}">']
+    if task_id:
+        tags.append(f'<meta name="{PAGE_TASK_META}" content="{html.escape(task_id)}">')
+    if title:
+        escaped = html.escape(title, quote=False)
+        if _PAGE_TITLE.search(text):
+            text = _PAGE_TITLE.sub(lambda _: f"<title>{escaped}</title>", text, count=1)
+        else:
+            tags.append(f"<title>{escaped}</title>")
+    block = "".join(tags)
+    for opener in (_HEAD_OPEN, _DOCTYPE):
+        found = opener.search(text)
+        if found:
+            glue = "" if opener is _HEAD_OPEN else "\n<head>"
+            tail = "" if opener is _HEAD_OPEN else "</head>"
+            return text[: found.end()] + glue + block + tail + text[found.end() :]
+    return block + "\n" + text
 
 
 def _vault_root(target: Path) -> Path | None:
@@ -743,6 +794,7 @@ def _task_callout(
     approved: bool,
     done_ids: set[str],
     now: datetime,
+    pages: list[str] | None = None,
 ) -> list[str]:
     """A task as a folded Obsidian callout coloured by status, with its gist inside.
 
@@ -765,7 +817,10 @@ def _task_callout(
     else:
         kind, detail = "todo", "ready"
     head = f"> [!{kind}]- `{task['id']}` {title}" + (f" — {detail}" if detail else "")
-    body = (f"> {_escape_html(line)}".rstrip() for line in _task_body(task, current))
+    lines = _task_body(task, current)
+    if pages:
+        lines.append("- **Pages:** " + " · ".join(pages))
+    body = (f"> {_escape_html(line)}".rstrip() for line in lines)
     return [_escape_html(head), *body]
 
 
@@ -1628,6 +1683,109 @@ class NotesBridge:
         todos, load_warnings = self._load_todos(target, settings, plan_ids)
         return todos, [*todo_warnings, *load_warnings]
 
+    def pages_dir(self, target: Path | None = None) -> tuple[Path, bool]:
+        """Where pages are stored, and whether sync mirrors that folder into the vault.
+
+        The first `docs:` folder named `pages`, else `.local/share/agops/pages` in the
+        agops home (AGOPS_HOME overrides the user's home, as for the other tool files).
+        """
+        target = target or self.target()
+        if target is not None:
+            settings, _ = _load_settings(target, create=False)
+            for raw in settings["docs"]:
+                folder = Path(raw).expanduser()
+                if folder.name == "pages":
+                    return folder, True
+        return default_home() / DEFAULT_PAGES_DIR, False
+
+    def add_page(
+        self,
+        source: Path,
+        plan_id: str,
+        task_id: str | None = None,
+        title: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """Store an HTML page as `<pages dir>/<plan-id>-<name>.html`, tag it, and sync notes.
+
+        The copy gets `agops-plan` (and `agops-task`) meta tags so the plan note and its task
+        link the page. Registering the same name again replaces the page.
+        """
+        source = source.expanduser()
+        if source.suffix.lower() != PAGE_SUFFIX or not source.is_file():
+            raise ValueError(f"A page must be an existing {PAGE_SUFFIX} file: {source}")
+        if source.stat().st_size > MAX_DOC_BYTES:
+            raise ValueError(f"Page is larger than {MAX_DOC_BYTES} bytes: {source}")
+        try:
+            text = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Page is not UTF-8 text: {source}") from exc
+        if any(pattern.search(text) for pattern in SECRET_PATTERNS):
+            raise ValueError("Page looks like it holds a credential; not stored")
+        plan_id = slug(plan_id)
+        if plan_id not in {summary["id"] for summary in self.hub.list_plans()}:
+            raise ValueError(f"Unknown plan: {plan_id}")
+        if task_id and task_id not in {
+            task["id"] for task in load_plan(self.hub.root, plan_id)["tasks"]
+        }:
+            raise ValueError(f"Unknown task {task_id} in plan {plan_id}")
+        found = _PAGE_TITLE.search(text)
+        shown = title or (" ".join(html.unescape(found.group(1)).split()) if found else "")
+        name = slug(name or shown or source.stem).removeprefix(plan_id + "-") or "page"
+        warnings: list[str] = []
+        if _REMOTE_SCRIPT.search(text):
+            warnings.append("Page loads a remote script; inline it so the page works offline")
+        try:
+            target = self.target()
+        except ValueError:  # an explicit --repo hub has no notes profile
+            target = None
+        folder, mirrored = self.pages_dir(target)
+        destination = folder / f"{plan_id}-{name}{PAGE_SUFFIX}"
+        _atomic_write(destination, _tag_page(text, plan_id, task_id, title))
+        result: dict[str, Any] = {"page": str(destination), "warnings": warnings}
+        if target is None or not target.is_dir():
+            warnings.append("No notes target is connected; the page is stored but not linked")
+            return result
+        if not mirrored:
+            warnings.append(f"Add {folder} to docs: in {target / SETTINGS_FILE} to link pages")
+        rendered = self.render_all()
+        result.update(rendered)
+        result["warnings"] = [*warnings, *rendered["warnings"]]
+        if mirrored:
+            vault = f"{DOCS_DIR}/{_workspace_dir(folder.name)}/{destination.name}"
+            result["vault_path"] = str(target / vault)
+        return result
+
+    def recent_pages(self, plan_id: str, limit: int = BRIEF_PAGE_LIMIT) -> list[dict[str, str]]:
+        """The newest pages that name the plan, read-only, for the brief."""
+        target = self.target()
+        if target is None:
+            return []
+        folder, mirrored = self.pages_dir(target)
+        if not mirrored or not folder.is_dir():
+            return []
+        ids = {summary["id"] for summary in self.hub.list_plans()} | {plan_id}
+        found: list[tuple[float, dict[str, str]]] = []
+        for file in folder.glob(f"*{PAGE_SUFFIX}"):
+            if file.name.startswith(".") or file.is_symlink() or not file.is_file():
+                continue
+            text = file.read_text(encoding="utf-8", errors="replace")
+            if _named_for(file.stem, ids) != plan_id and plan_id not in _page_plans(text):
+                continue
+            title = _PAGE_TITLE.search(text)
+            found.append(
+                (
+                    file.stat().st_mtime,
+                    {
+                        "title": " ".join(html.unescape(title.group(1)).split())
+                        if title
+                        else file.stem,
+                        "path": str(target / DOCS_DIR / _workspace_dir(folder.name) / file.name),
+                    },
+                )
+            )
+        return [page for _, page in sorted(found, key=lambda item: item[0], reverse=True)[:limit]]
+
     def _sidecar(self, target: Path) -> dict[str, Any]:
         path = target / SIDECAR
         if not path.exists():
@@ -1844,7 +2002,14 @@ class NotesBridge:
             lines.extend(["", f"### {heading}"])
             for task in group:
                 current = state.tasks.get(task["id"])
-                lines.extend(["", *_task_callout(task, current, approved, done_ids, now)])
+                task_pages = [
+                    _link(doc["title"], note, doc["relative"])
+                    for doc in overview["docs"]
+                    if doc["kind"] == "page" and task["id"] in doc.get("tasks", ())
+                ]
+                lines.extend(
+                    ["", *_task_callout(task, current, approved, done_ids, now, task_pages)]
+                )
 
         criteria = plan.get("acceptance_criteria") or []
         if criteria:
@@ -2563,11 +2728,13 @@ class NotesBridge:
                     destination.write_bytes(data)
                 produced[relative] = digest
                 plans: list[str] = []
+                tasks: list[str] = []
                 if suffix == PAGE_SUFFIX:
                     kind = "page"
                     found = _PAGE_TITLE.search(text)
                     title = " ".join(html.unescape(found.group(1)).split()) if found else ""
                     plans = _page_plans(text)
+                    tasks = _page_meta(text, PAGE_TASK_META)
                 elif suffix == ".md":
                     kind = "doc"
                     headings = (
@@ -2589,6 +2756,7 @@ class NotesBridge:
                         "group": posixpath.dirname(relative)[len(DOCS_DIR) + 1 :],
                         "modified": datetime.fromtimestamp(file.stat().st_mtime).date(),
                         "plans": plans,
+                        "tasks": tasks,
                     }
                 )
         for relative in sorted(set(known) - set(produced)):

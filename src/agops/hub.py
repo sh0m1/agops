@@ -751,6 +751,7 @@ class Hub:
             if hidden:
                 detail = ", ".join(f"{count} {tier}" for tier, count in sorted(hidden.items()))
                 lines.append(f"  - {sum(hidden.values())} task(s) hidden by tier: {detail}")
+            lines.extend(self._page_brief(summary["id"]))
         # Before knowledge: the byte cut at the end drops the tail first.
         lines.extend(self._todo_brief(project_id, remote, state))
         lines.extend(["", "## Knowledge"])
@@ -778,6 +779,14 @@ class Hub:
         if len(encoded) <= max_bytes:
             return result
         return encoded[: max_bytes - 32].decode("utf-8", errors="ignore") + "\n[brief truncated]\n"
+
+    def _page_brief(self, plan_id: str) -> list[str]:
+        """The plan's newest pages (title and vault path); a notes problem just hides them."""
+        try:
+            pages = NotesBridge(self).recent_pages(plan_id)
+        except (OSError, ValueError, yaml.YAMLError):
+            return []
+        return [f"  - Page: {page['title']} — {page['path']}" for page in pages]
 
     def _todo_brief(self, project_id: str | None, remote: str | None, state: State) -> list[str]:
         """A few open todos from the user's todo file that link open plans."""

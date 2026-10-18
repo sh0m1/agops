@@ -297,7 +297,14 @@ from `<title>`, and opens in the browser from Obsidian. Images and `.drawio` fil
 A plan links the docs, pages and diagrams named `<plan-id>.*` or `<plan-id>-*` (a name goes to
 the longest plan id it starts with), any whose path its definition mentions, and any page with
 `<meta name="agops-plan" content="<plan-id>">`. They show on separate `Docs:`, `Pages:` and
-`Diagrams:` lines; `Home.md` lists the newest pages. Each Markdown copy carries its folder in its name
+`Diagrams:` lines; `Home.md` lists the newest pages. A page with
+`<meta name="agops-task" content="<task-id>">` also shows on that task's callout.
+`agops page add <file> --plan <id> [--task <id>] [--title T] [--slug S]` (MCP `hub_add_page`)
+stores a page as `<pages dir>/<plan-id>-<slug>.html`, sets both meta tags, rejects non-HTML,
+oversize and credential-like files, warns about remote scripts, runs a notes sync and prints
+the vault path. The pages dir is the first `docs:` folder named `pages`, else
+`~/.local/share/agops/pages` (list it under `docs:` so sync mirrors it). `agops brief` lists
+up to 5 newest pages per active plan. Each Markdown copy carries its folder in its name
 (`workstreams/x.md` becomes `workstreams/x (workstreams).md`, with links between the docs
 rewritten), so a doc named after a plan never captures a `[[plan-id]]` link. Dot files, symlinks,
 and files matching credential patterns are skipped, and a copy edited in the vault is kept and no

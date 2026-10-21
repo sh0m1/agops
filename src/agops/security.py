@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-MAX_ENTRY_BYTES = 128 * 1024
+MAX_ENTRY_BYTES = 256 * 1024
 PROHIBITED_NAMES = {".env", "id_rsa", "id_ed25519", "credentials.json"}
 PROHIBITED_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 SECRET_PATTERNS = (

@@ -85,7 +85,10 @@ Only `global` scope is rendered. Those files are loaded for every session whatev
 starts in, so a `workspace:` or `project:` preference would leak into unrelated work; scoped
 preferences reach agents through the brief and the hook below, which resolve scope per session.
 
-Keep an entry under 500 characters — the brief excerpts longer bodies.
+Keep an entry under 500 characters — the brief excerpts longer bodies. The brief leaves global
+preferences to the instruction files and only counts them. Outside a registered project it lists
+one line of task counts per active plan and knowledge titles without bodies, so a session started
+in a home folder does not load every plan's task history.
 
 ## Hook
 
@@ -103,8 +106,10 @@ Register it for `SessionStart`, `PostToolUse`, `Stop`, `SessionEnd`, and `UserPr
 anything in the hub, and releases after one continuation so it cannot loop; an agent that has
 nothing durable to record ends its message with `Hub impact: none — <reason>`. On
 `UserPromptSubmit` it injects the preferences whose scope covers the session, gated on a digest so
-unchanged text is not re-sent every turn. Preferences are read from disk per event, so
-`agops knowledge add` reaches the next prompt without restarting the client.
+unchanged text is not re-sent every turn. It skips a preference whose text is already in a
+`CLAUDE.md` that the session loads, so a preference rendered by `agops setup` is in context once.
+Preferences are read from disk per event, so `agops knowledge add` reaches the next prompt
+without restarting the client.
 
 Routing resolves through the hub's registered projects, so run `agops project register <path>
 [--workspace NAME]` for the repositories you want watched. A hook defect never blocks a session:

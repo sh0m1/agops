@@ -126,6 +126,12 @@ tasks:
 """
 
 
+def _widgets(tmp_path: Path) -> Path:
+    """A checkout of acme-widgets: tasks show in full only inside a registered project."""
+    path = tmp_path / "widgets"
+    return path if path.exists() else project(path)
+
+
 def _activate_tiered(hub: Hub, tmp_path: Path) -> None:
     plan = tmp_path / "tiered.yaml"
     plan.write_text(TIERED_PLAN, encoding="utf-8")
@@ -136,7 +142,7 @@ def _activate_tiered(hub: Hub, tmp_path: Path) -> None:
 def test_brief_declares_session_and_hides_other_tiers(policy_hub: Path, tmp_path: Path) -> None:
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
-    brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), model="claude-sonnet-5", actor="codex", session="one")
     assert "Session: codex · claude-sonnet-5 · tier=standard" in brief
     assert "exec: ready" in brief
     assert "review: ready" not in brief
@@ -148,8 +154,8 @@ def test_brief_declares_session_and_hides_other_tiers(policy_hub: Path, tmp_path
 def test_brief_redeclaration_overwrites_record(policy_hub: Path, tmp_path: Path) -> None:
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
-    hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
-    brief = hub.brief(Path("/tmp"), model="claude-opus-5", actor="codex", session="one")
+    hub.brief(_widgets(tmp_path), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), model="claude-opus-5", actor="codex", session="one")
     assert "tier=frontier" in brief
     assert "review: ready" in brief
     assert "1 task(s) hidden by tier: 1 standard" in brief
@@ -160,15 +166,15 @@ def test_brief_redeclaration_overwrites_record(policy_hub: Path, tmp_path: Path)
 def test_brief_uses_record_when_no_model_passed(policy_hub: Path, tmp_path: Path) -> None:
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
-    hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
-    brief = hub.brief(Path("/tmp"), actor="codex", session="one")
+    hub.brief(_widgets(tmp_path), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), actor="codex", session="one")
     assert "tier=standard" in brief
 
 
 def test_brief_undeclared_shows_nudge_and_everything(policy_hub: Path, tmp_path: Path) -> None:
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
-    brief = hub.brief(Path("/tmp"), actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), actor="codex", session="one")
     assert "Session: undeclared — pass model=<your model id> to hub_get_brief" in brief
     assert "exec: ready" in brief and "review: ready" in brief
     assert "hidden by tier" not in brief
@@ -177,7 +183,7 @@ def test_brief_undeclared_shows_nudge_and_everything(policy_hub: Path, tmp_path:
 def test_brief_unmapped_model_warns_and_hides_nothing(policy_hub: Path, tmp_path: Path) -> None:
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
-    brief = hub.brief(Path("/tmp"), model="mystery-9", actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), model="mystery-9", actor="codex", session="one")
     assert "tier=unknown" in brief
     assert "Warning: model mystery-9 is not mapped in memory/policy/tiers.yaml" in brief
     assert "exec: ready" in brief and "review: ready" in brief
@@ -188,7 +194,7 @@ def test_brief_without_policy_is_unenforced(hub_repo: Path, tmp_path: Path, monk
     monkeypatch.delenv("AGOPS_MODEL", raising=False)
     hub = Hub(hub_repo)
     _activate_tiered(hub, tmp_path)
-    brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), model="claude-sonnet-5", actor="codex", session="one")
     assert "tier=unenforced" in brief
     assert "exec: ready" in brief and "review: ready" in brief
 
@@ -197,7 +203,7 @@ def test_env_model_overrides_argument(policy_hub: Path, tmp_path: Path, monkeypa
     monkeypatch.setenv("AGOPS_MODEL", "claude-opus-5")
     hub = Hub(policy_hub)
     _activate_tiered(hub, tmp_path)
-    brief = hub.brief(Path("/tmp"), model="claude-sonnet-5", actor="codex", session="one")
+    brief = hub.brief(_widgets(tmp_path), model="claude-sonnet-5", actor="codex", session="one")
     assert "claude-opus-5 · tier=frontier" in brief
 
 
@@ -316,3 +322,11 @@ def test_matching_tier_override_stamps_false(policy_hub: Path, tmp_path: Path) -
     record_session("one", "codex", "claude-sonnet-5", "standard")
     event = hub.claim_task("tiered", "exec", "codex", "one", worktree, allow_tier_mismatch=True)
     assert event["payload"]["tier_override"] is False
+
+
+def test_brief_outside_a_project_counts_tasks_per_plan(policy_hub: Path, tmp_path: Path) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    brief = hub.brief(Path("/tmp"), model="claude-opus-5", actor="codex", session="one")
+    assert "- tiered: Tiered (2 ready)" in brief
+    assert "review: ready" not in brief

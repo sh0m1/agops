@@ -722,11 +722,24 @@ class Hub:
                 "Session: undeclared — pass model=<your model id> to hub_get_brief before claiming"
             )
         lines.extend(["", "## Active plans"])
+        if not project_id:
+            # Outside a registered project no plan is local, so per-task detail is noise
+            # that each session pays for; one counted line per plan is enough to orient.
+            lines.append("Overview only: run from a registered project or read a plan for tasks.")
         for summary in self.list_plans():
             plan_state = state.plans.get(summary["id"])
             if not plan_state or not plan_state.active:
                 continue
             plan = load_plan(self.root, summary["id"], plan_state.approved_revision)
+            if not project_id:
+                counts: dict[str, int] = {}
+                for task in plan["tasks"]:
+                    task_state = plan_state.tasks.get(task["id"])
+                    status = task_state.status if task_state else "ready"
+                    counts[status] = counts.get(status, 0) + 1
+                detail = ", ".join(f"{count} {status}" for status, count in sorted(counts.items()))
+                lines.append(f"- {summary['id']}: {summary['title']} ({detail})")
+                continue
             relevant = [
                 task
                 for task in plan["tasks"]
@@ -768,12 +781,31 @@ class Hub:
             for entry in self._current_knowledge():
                 if entry["scope_path"] == selected_scope:
                     scoped[entry["key"]] = entry
+        # Global preferences are rendered into every client's instruction file by
+        # `agops setup`, so repeating them here would load them twice.
+        preferences = [
+            key
+            for key, entry in scoped.items()
+            if entry["scope_path"] == "global" and entry["kind"] == "preference"
+        ]
+        for key in preferences:
+            del scoped[key]
+        if preferences:
+            lines.append(
+                f"- {len(preferences)} global preference(s) are in your instruction file; "
+                "`agops setup` refreshes it."
+            )
         # Workspace knowledge is the broadest set, so it is listed last and truncated first.
         display_rank = {"global": 0, "project": 1, "workspace": 2}
         for entry in sorted(
             scoped.values(), key=lambda item: display_rank[item["scope_path"].split("/")[0]]
         ):
-            lines.append(f"- {entry['body'][:500]}")
+            if project_id:
+                lines.append(f"- {entry['body'][:500]}")
+            else:
+                lines.append(f"- {entry['title']} ({entry['kind']}, {entry['key']})")
+        if scoped and not project_id:
+            lines.append("Titles only outside a registered project; search knowledge for bodies.")
         result = "\n".join(lines).strip() + "\n"
         encoded = result.encode("utf-8")
         if len(encoded) <= max_bytes:
@@ -892,6 +924,7 @@ class Hub:
                     "text": text,
                     "body": body,
                     "key": metadata.get("key", directory.name),
+                    "title": metadata.get("title") or metadata.get("key", directory.name),
                     "scope_path": str(directory.parent.relative_to(root)),
                     "kind": metadata.get("kind", "fact"),
                 }

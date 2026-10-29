@@ -1891,7 +1891,7 @@ def test_page_add_copies_tags_links_and_lists_in_brief(
     assert f"- **Pages:** {link}" in first  # the task callout links it too
     assert link not in note.split("`second`", 1)[1].split("## ", 1)[0]
     hub.approve_plan("shared-plan")
-    brief = hub.brief(tmp_path)
+    brief = hub.brief(make_project(tmp_path / "widgets"))
     assert f"Page: Flow — {result['vault_path']}" in brief
 
     # Registering again replaces the page instead of adding a second one.

@@ -10,13 +10,39 @@ from agops.hub import Hub
 from agops.security import validate_content
 
 
-def test_knowledge_is_searchable_and_in_brief(hub_repo: Path) -> None:
+def test_knowledge_is_searchable_and_in_brief(hub_repo: Path, tmp_path: Path) -> None:
     hub = Hub(hub_repo)
     hub.add_knowledge(
         "global", "testing", "Testing", "Always preserve concrete test evidence.", "codex", "one"
     )
     assert hub.search("concrete evidence")
-    assert "Always preserve concrete test evidence" in hub.brief(Path("/tmp"))
+    assert "Always preserve concrete test evidence" in hub.brief(project(tmp_path / "widgets"))
+
+
+def test_brief_outside_a_project_lists_titles_not_bodies(hub_repo: Path) -> None:
+    hub = Hub(hub_repo)
+    hub.add_knowledge("global", "testing", "Testing", "Keep test evidence.", "codex", "one")
+    brief = hub.brief(Path("/tmp"))
+    assert "- Testing (fact, testing)" in brief
+    assert "Keep test evidence." not in brief
+
+
+def test_brief_leaves_global_preferences_to_the_instruction_file(
+    hub_repo: Path, tmp_path: Path
+) -> None:
+    hub = Hub(hub_repo)
+    hub.add_knowledge(
+        "global", "style", "Style", "Answer briefly.", "codex", "one", kind="preference"
+    )
+    widgets = project(tmp_path / "widgets")
+    hub.register_project(widgets, workspace="acme")
+    hub.add_knowledge(
+        "workspace:acme", "local", "Local", "Acme style.", "codex", "one", kind="preference"
+    )
+    brief = hub.brief(widgets)
+    assert "Answer briefly." not in brief
+    assert "1 global preference(s) are in your instruction file" in brief
+    assert "Acme style." in brief
 
 
 def test_brief_includes_knowledge_of_the_registered_workspace(
@@ -60,8 +86,9 @@ def test_brief_still_reads_workspace_definition_files(hub_repo: Path, tmp_path: 
     assert "Acme-wide rule." in hub.brief(widgets)
 
 
-def test_knowledge_revision_requires_explicit_supersession(hub_repo: Path) -> None:
+def test_knowledge_revision_requires_explicit_supersession(hub_repo: Path, tmp_path: Path) -> None:
     hub = Hub(hub_repo)
+    widgets = project(tmp_path / "widgets")
     first = hub.add_knowledge("global", "rule", "Rule", "First version.", "codex", "one")
     entry_id = first["payload"]["id"]
     with pytest.raises(ValueError, match="supersedes"):
@@ -69,11 +96,11 @@ def test_knowledge_revision_requires_explicit_supersession(hub_repo: Path) -> No
     second = hub.add_knowledge(
         "global", "rule", "Rule", "Second version.", "claude", "two", entry_id
     )
-    brief = hub.brief(Path("/tmp"))
+    brief = hub.brief(widgets)
     assert "Second version" in brief
     assert "First version" not in brief
     hub.retire_knowledge("global", "rule", "No longer applies.", "codex", "three")
-    assert "Second version" not in hub.brief(Path("/tmp"))
+    assert "Second version" not in hub.brief(widgets)
     assert not hub.search("Second version")
     assert second["payload"]["status"] == "active"
 

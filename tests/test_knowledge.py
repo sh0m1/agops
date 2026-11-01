@@ -6,7 +6,7 @@ import pytest
 import yaml
 from conftest import project
 
-from agops.hub import KNOWLEDGE_BUDGET, PLANS_BUDGET, Hub
+from agops.hub import BRIEF_MAX_BYTES, KNOWLEDGE_BUDGET, PLANS_BUDGET, Hub
 from agops.security import validate_content
 
 
@@ -216,7 +216,7 @@ def test_brief_closes_the_plans_section_with_a_more_line(local_hub: Path, tmp_pa
     assert plans.splitlines()[-1] == expected
     assert len(brief[: brief.index("## Knowledge")].encode()) <= PLANS_BUDGET
     assert "Widgets-only rule." in brief and "[brief truncated]" not in brief
-    assert len(brief.encode()) <= 10_000
+    assert len(brief.encode()) <= BRIEF_MAX_BYTES
 
 
 def test_brief_names_the_cut_when_several_plans_overflow(local_hub: Path, tmp_path: Path) -> None:
@@ -230,6 +230,64 @@ def test_brief_names_the_cut_when_several_plans_overflow(local_hub: Path, tmp_pa
     assert (
         plans[-1] == f"- … {80 - shown} more open task(s) in 2 plans: agops task ready --plan <id>"
     )
+
+
+def test_brief_counts_plan_lines_it_drops_besides_open_tasks(
+    local_hub: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub)
+    widgets = project(tmp_path / "widgets")
+    title = "A rather long task title that fills the line " * 2
+    _plan_with_tasks(hub, tmp_path, "aaa-big", [(f"open-{n:03d}", title) for n in range(80)])
+    # A task of another project keeps this plan active after its own task is completed.
+    (tmp_path / "done.yaml").write_text(
+        "id: zzz-done\ntitle: Done plan\ngoal: g\ntasks:\n"
+        "  - {id: only, title: Only task, project: acme-widgets, read_only: true}\n"
+        "  - {id: away, title: Away, project: other-app, read_only: true}\n",
+        encoding="utf-8",
+    )
+    hub.draft_plan(tmp_path / "done.yaml", "codex", "draft")
+    hub.approve_plan("zzz-done")
+    hub.claim_task("zzz-done", "only", "codex", "one", widgets)
+    hub.complete_task("zzz-done", "only", "codex", "one", "Done.", ["tests pass"])
+    plans = hub.brief(widgets).split("## Knowledge")[0].rstrip("\n").splitlines()
+    shown = sum(line.startswith("  - open-") for line in plans)
+    command = "agops task ready --plan aaa-big"
+    assert plans[-1] == f"- … {80 - shown} more open task(s) and 1 plan(s): {command}"
+    assert not any(line.startswith("- zzz-done") for line in plans)
+
+
+def test_brief_lists_newest_knowledge_first_inside_each_scope(
+    hub_repo: Path, tmp_path: Path
+) -> None:
+    hub = Hub(hub_repo)
+    widgets = project(tmp_path / "widgets")
+    for key in ("m-first", "a-second", "z-third"):
+        hub.add_knowledge("project:acme-widgets", key, key, f"Body of {key}.", "codex", "one")
+        hub.add_knowledge("global", key, key, "Global body.", "codex", "one")
+    section = hub.brief(widgets).split("## Knowledge")[1]
+    project_order = [
+        section.index(f"- Body of {key}.") for key in ("z-third", "a-second", "m-first")
+    ]
+    assert project_order == sorted(project_order)
+    # The project entries hide the global ones with the same keys; check global separately.
+    hub.add_knowledge("global", "b-old", "b-old", "x", "codex", "one")
+    hub.add_knowledge("global", "c-new", "c-new", "x", "codex", "one")
+    section = hub.brief(widgets).split("## Knowledge")[1]
+    assert section.index("- c-new (") < section.index("- b-old (")
+
+
+def test_brief_orders_equal_timestamps_by_key(
+    hub_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("agops.hub.timestamp", lambda: "2026-01-01T00:00:00Z")
+    hub = Hub(hub_repo)
+    widgets = project(tmp_path / "widgets")
+    for key in ("b-two", "a-one", "c-three"):
+        hub.add_knowledge("project:acme-widgets", key, key, f"Body of {key}.", "codex", "one")
+    section = hub.brief(widgets).split("## Knowledge")[1]
+    order = [section.index(f"- Body of {key}.") for key in ("a-one", "b-two", "c-three")]
+    assert order == sorted(order)
 
 
 def test_brief_orders_knowledge_project_workspace_global(hub_repo: Path, tmp_path: Path) -> None:
@@ -254,7 +312,7 @@ def test_brief_entry_bodies_are_collapsed_and_cut_at_a_word(hub_repo: Path, tmp_
     assert len(entry) == 1
     text = entry[0][2:]
     assert text.startswith("First line. second line alpha beta gamma")
-    assert len(text) <= 400 and text.endswith(("gamma…", "beta…", "alpha…"))
+    assert len(text) <= 300 and text.endswith(("gamma…", "beta…", "alpha…"))
 
 
 def test_small_max_bytes_scales_the_budgets_so_every_section_shows(
@@ -295,6 +353,18 @@ def test_search_excerpt_is_the_collapsed_body_without_frontmatter(hub_repo: Path
     assert len(hit["excerpt"]) <= 300 and "\n" not in hit["excerpt"]
     for leak in ("---", "created_by", "schema", "supersedes"):
         assert leak not in hit["excerpt"]
+
+
+def test_search_matches_title_key_and_body_but_not_other_frontmatter(hub_repo: Path) -> None:
+    hub = Hub(hub_repo)
+    hub.add_knowledge("global", "plain", "Plain title", "Plain body.", "zebra-bot", "one")
+    assert not hub.search("zebra")  # created_by only
+    assert not hub.search("supersedes")  # a frontmatter field name
+    assert not hub.search("global")  # scope only
+    assert hub.search("plain")
+    hub.add_knowledge("global", "other", "Findable heading", "Unrelated body.", "codex", "one")
+    assert [hit["key"] for hit in hub.search("findable")] == ["other"]
+    assert [hit["key"] for hit in hub.search("other")] == ["other"]
 
 
 def test_search_returns_eight_hits_by_default(hub_repo: Path) -> None:

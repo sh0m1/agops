@@ -38,14 +38,14 @@ from .todos import plain_text
 
 Mutation = Callable[[State], tuple[dict[str, Any], str]]
 TODO_BRIEF_LIMIT = 10
-BRIEF_MAX_BYTES = 10_000
+BRIEF_MAX_BYTES = 8_000
 # Per-section byte budgets (UTF-8). A section adds whole lines and, when it drops some,
 # ends with one "… N more" line. The final `max_bytes` cut is only a safety net.
-PLANS_BUDGET = 4_000
-TODOS_BUDGET = 1_000
-KNOWLEDGE_BUDGET = 4_000
+PLANS_BUDGET = 3_000
+TODOS_BUDGET = 800
+KNOWLEDGE_BUDGET = 2_500
 LATEST_CHARS = 300
-ENTRY_BODY_CHARS = 400
+ENTRY_BODY_CHARS = 300
 SEARCH_EXCERPT_CHARS = 300
 BriefItem = tuple[str, str | None]
 
@@ -737,7 +737,9 @@ class Hub:
             applicable = set(self._scopes_for(self.project_for_path(cwd)[0]))
         ranked: list[tuple[int, int, str, dict[str, str]]] = []
         for entry in self._current_knowledge(include_archives=include_archives):
-            score = sum(entry["text"].lower().count(word) for word in words)
+            # Frontmatter fields such as created_by or scope are not searchable text.
+            haystack = f"{entry['title']}\n{entry['key']}\n{entry['body']}".lower()
+            score = sum(haystack.count(word) for word in words)
             if not score:
                 continue
             path = str(entry["path"].relative_to(self.root))
@@ -816,8 +818,9 @@ class Hub:
             # Outside a registered project no plan is local, so per-task detail is noise
             # that each session pays for; one counted line per plan is enough to orient.
             lines.append("Overview only: run from a registered project or read a plan for tasks.")
-        # Items are (text, plan id of a task line or None); the plans budget decides how
-        # many fit, and a dropped task is counted in the closing line.
+        # Items are (text, tag). The tag is "task:<plan id>" for an open task and
+        # "plan:<plan id>" for a plan line with no open task; the plans budget decides how
+        # many fit, and the closing line counts dropped tasks and bare plan lines.
         plan_items: list[BriefItem] = []
         for summary in self.list_plans():
             plan_state = state.plans.get(summary["id"])
@@ -837,9 +840,12 @@ class Hub:
                 status = task_state.status if task_state else "ready"
                 counts[status] = counts.get(status, 0) + 1
             detail = ", ".join(f"{count} {status}" for status, count in sorted(counts.items()))
-            plan_items.append((f"- {summary['id']}: {summary['title']} ({detail})", None))
+            header = f"- {summary['id']}: {summary['title']} ({detail})"
             if not project_id:
+                plan_items.append((header, None))
                 continue
+            header_index = len(plan_items)
+            plan_items.append((header, None))
             hidden: dict[str, int] = {}
             for task in relevant:
                 task_state = plan_state.tasks.get(task["id"])
@@ -855,7 +861,9 @@ class Hub:
                 text = f"  - {task['id']}: {status}{owner} — {task['title']}"
                 if status in {"claimed", "blocked"} and task_state and task_state.summary:
                     text += f"\n    Latest: {_clip(task_state.summary, LATEST_CHARS)}"
-                plan_items.append((text, summary["id"]))
+                plan_items.append((text, f"task:{summary['id']}"))
+            if len(plan_items) == header_index + 1:
+                plan_items[header_index] = (header, f"plan:{summary['id']}")
             if hidden:
                 detail = ", ".join(f"{count} {tier}" for tier, count in sorted(hidden.items()))
                 note = f"  - {sum(hidden.values())} task(s) hidden by tier: {detail}"
@@ -865,16 +873,17 @@ class Hub:
         def plans_marker(dropped: list[BriefItem]) -> str | None:
             if not project_id:
                 return f"- … {len(dropped)} more plan(s): agops plan list"
-            ids = [plan_id for _, plan_id in dropped if plan_id]
+            ids = [tag[5:] for _, tag in dropped if tag and tag.startswith("task:")]
+            bare = sum(1 for _, tag in dropped if tag and tag.startswith("plan:"))
             if not ids:
-                return None
+                return f"- … {bare} more plan(s): agops plan list" if bare else None
             plans = list(dict.fromkeys(ids))
+            command = f"agops task ready --plan {plans[0] if len(plans) == 1 else '<id>'}"
+            if bare:
+                return f"- … {len(ids)} more open task(s) and {bare} plan(s): {command}"
             if len(plans) == 1:
-                return f"- … {len(ids)} more open task(s): agops task ready --plan {plans[0]}"
-            return (
-                f"- … {len(ids)} more open task(s) in {len(plans)} plans: "
-                "agops task ready --plan <id>"
-            )
+                return f"- … {len(ids)} more open task(s): {command}"
+            return f"- … {len(ids)} more open task(s) in {len(plans)} plans: {command}"
 
         used = sum(_size(line) for line in lines)
         lines.extend(_fit(plan_items, plans_budget, used, plans_marker))
@@ -911,11 +920,14 @@ class Hub:
                 "`agops setup` refreshes it."
             )
         # Project knowledge is the most specific, then workspace; global is only titles.
+        # Inside a group the newest entry comes first, then key order. Python's sort is
+        # stable, so each pass keeps the order the previous one set for equal keys.
         display_rank = {"project": 0, "workspace": 1, "global": 2}
+        ordered = sorted(scoped.values(), key=lambda item: item["key"])
+        ordered.sort(key=lambda item: item["created_at"], reverse=True)
+        ordered.sort(key=lambda item: display_rank[item["scope_path"].split("/")[0]])
         items: list[BriefItem] = []
-        for entry in sorted(
-            scoped.values(), key=lambda item: display_rank[item["scope_path"].split("/")[0]]
-        ):
+        for entry in ordered:
             if entry["scope_path"] == "global":
                 items.append((f"- {entry['title']} ({entry['kind']}, {entry['key']})", None))
             else:
@@ -1059,6 +1071,7 @@ class Hub:
                     "title": metadata.get("title") or metadata.get("key", directory.name),
                     "scope_path": str(directory.parent.relative_to(root)),
                     "kind": metadata.get("kind", "fact"),
+                    "created_at": str(metadata.get("created_at") or ""),
                 }
             )
         return entries

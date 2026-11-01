@@ -87,6 +87,8 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
 
     search = commands.add_parser("search")
     search.add_argument("query", nargs="+", help="Words to look for")
+    search.add_argument("--cwd", default=".", help="Rank knowledge for this directory first")
+    search.add_argument("--archives", action="store_true", help="Include archive entries")
 
     migrate = commands.add_parser("migrate-remember")
     migrate.add_argument("path")
@@ -318,7 +320,11 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "policy":
         return policy_report(hub, validate_only=args.policy_command == "validate")
     if args.command == "search":
-        return hub.search(" ".join(args.query))
+        return hub.search(
+            " ".join(args.query),
+            include_archives=args.archives,
+            cwd=Path(args.cwd).resolve(),
+        )
     if args.command == "migrate-remember":
         return migrate_remember(hub, Path(args.path), args.project, args.actor)
     if args.command == "project":

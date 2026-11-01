@@ -553,3 +553,29 @@ def test_format_helpers_handle_edge_events() -> None:
     )
     assert views.knowledge_size_warning(" " + "z" * 500 + "\n") is None
     assert views.short_time("2026-01-02T03:04:05.123456Z") == "2026-01-02T03:04:05Z"
+
+
+def test_cli_search_takes_words_skips_archives_and_ranks_the_cwd_project(
+    hub_repo: Path, tmp_path: Path
+) -> None:
+    hub = Hub(hub_repo)
+    worktree = project(tmp_path / "wt", "https://example.com/acme/example-project.git")
+    other = project(tmp_path / "other", "https://example.com/acme/other-project.git")
+    here, there = hub.project_for_path(worktree)[0], hub.project_for_path(other)[0]
+    # The other project's entry repeats the words, so it outscores the local entry.
+    hub.add_knowledge(
+        f"project:{there}", "far-fact", "Far fact", "Deploy widgets. Deploy widgets.", "t", "s"
+    )
+    hub.add_knowledge(f"project:{here}", "local-fact", "Local fact", "Deploy widgets.", "t", "s")
+    hub.add_knowledge(
+        "global", "old-notes", "Old notes", "Deploy widgets.", "t", "s", kind="archive"
+    )
+
+    found = _json(hub_repo, "search", "deploy", "widgets", "--cwd", str(worktree))
+    assert [entry["key"] for entry in found] == ["local-fact", "far-fact"]
+    assert [entry["key"] for entry in _json(hub_repo, "search", "deploy")] == [
+        "far-fact",
+        "local-fact",
+    ]
+    with_archives = _json(hub_repo, "search", "deploy", "--archives")
+    assert "old-notes" in {entry["key"] for entry in with_archives}

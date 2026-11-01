@@ -36,9 +36,15 @@ def hub_get_brief(cwd: str = ".", model: str | None = None) -> str:
 
 
 @mcp.tool()
-def hub_search_knowledge(query: str) -> list[dict[str, str]]:
-    """Search readable knowledge entries with provenance."""
-    return hub().search(query)
+def hub_search_knowledge(
+    query: str, cwd: str | None = None, include_archives: bool = False
+) -> list[dict[str, str]]:
+    """Search knowledge: at most 8 hits with key, title, scope, kind and a short body excerpt.
+
+    Pass cwd to rank the entries of that directory's project first. Archives are left out
+    unless include_archives is true.
+    """
+    return hub().search(query, include_archives=include_archives, cwd=Path(cwd) if cwd else None)
 
 
 @mcp.tool()

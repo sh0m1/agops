@@ -1689,7 +1689,11 @@ class NotesBridge:
         The first `docs:` folder named `pages`, else `.local/share/agops/pages` in the
         agops home (AGOPS_HOME overrides the user's home, as for the other tool files).
         """
-        target = target or self.target()
+        if target is None:
+            try:
+                target = self.target()
+            except ValueError:  # an explicit --repo hub has no notes profile
+                target = None
         if target is not None:
             settings, _ = _load_settings(target, create=False)
             for raw in settings["docs"]:

@@ -137,11 +137,12 @@ definition. Unapproved tasks therefore never appear executable.
 Clients with MCP use the equivalent `hub_*` tools. Plan approval is intentionally CLI-only.
 
 CLI output is compact text by default (one line per task or result; `plan show` prints the goal
-cut to 300 characters and the open tasks with their acceptance). Put `--json` before the command
-for the full data: `agops --json task ready`, `agops --json plan show <plan>`. Read one task in
-full with `agops plan show <plan> --task <task>`, or the whole plan with `--full`. MCP
-`hub_read_plan` takes `task_id` and `full`; `hub_list_ready_tasks` returns `plan_id`, `id`,
-`title`, `tier`, `project` and `depends_on`.
+cut to 300 characters, a count of completed tasks and the open tasks with their acceptance). Put
+`--json` before the command for the full data: `agops --json task ready`,
+`agops --json plan show <plan>`. Read one task in full with `agops plan show <plan> --task <task>`,
+or the whole plan with `--full`. MCP `hub_read_plan` lists open tasks plus `completed` and `total`
+counts, and takes `task_id` and `full`; `hub_list_ready_tasks` returns `plan_id`, `id`, `title`,
+`tier`, `project` and `depends_on`.
 
 ## Execution tiers
 

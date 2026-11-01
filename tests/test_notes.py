@@ -1966,3 +1966,18 @@ def test_page_add_without_a_notes_target_uses_the_agops_home(
     assert result["page"] == str(stored) and stored.is_file()
     assert any("No notes target" in warning for warning in result["warnings"])
     assert "vault_path" not in result
+
+
+def test_page_add_works_on_a_hub_opened_with_an_explicit_repo(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub.from_environment(str(local_hub))
+    assert hub.profile == "explicit"
+    hub.draft_plan(plan_file, "codex", "one")
+    page = tmp_path / "ok.html"
+    page.write_text("<p>no title</p>")
+    result = NotesBridge(hub).add_page(page, "shared-plan", None, "A Title")
+    stored = fake_home / ".local" / "share" / "agops" / "pages" / "shared-plan-a-title.html"
+    assert result["page"] == str(stored) and stored.is_file()
+    assert any("No notes target" in warning for warning in result["warnings"])
+    assert "vault_path" not in result

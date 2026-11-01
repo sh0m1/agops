@@ -255,7 +255,7 @@ def test_plan_show_default_is_compact_text(active_hub: Path) -> None:
     assert len(out) < len(json.dumps(_json(active_hub, "plan", "show", "plan-a"))) / 2
 
 
-def test_plan_show_drops_acceptance_of_completed_tasks_and_reports_status(
+def test_plan_show_folds_completed_tasks_into_a_count_and_reports_status(
     active_hub: Path, tmp_path: Path
 ) -> None:
     who = _claim_args(tmp_path)
@@ -265,9 +265,64 @@ def test_plan_show_drops_acceptance_of_completed_tasks_and_reports_status(
     _text(active_hub, "task", "complete", "plan-a", "task-1", "--evidence", "e", *who[:4])
     done = _text(active_hub, "plan", "show", "plan-a").splitlines()
     assert done[2:] == [
-        "- task-1 [completed, standard] First task",
+        "Completed: 1 of 2 task(s); `--task <id>` shows one task, `--full` the whole plan.",
         "- task-2 [ready, frontier] Second task",
         "    - Second check passes",
+    ]
+
+
+def _many_tasks_plan(total: int) -> str:
+    tasks = "".join(
+        f"""  - id: task-{n}
+    title: Task number {n}
+    project: acme-widgets
+    write_scope: [t{n}/**]
+    acceptance: [Check {n} passes]
+    covers: []
+"""
+        for n in range(1, total + 1)
+    )
+    return f"id: plan-b\ntitle: Many tasks\ngoal: Finish most of it.\ntasks:\n{tasks}"
+
+
+def _finish_tasks(hub_root: Path, tmp_path: Path, total: int, done: int) -> None:
+    """Draft and approve `plan-b` with `total` tasks, then complete the first `done`."""
+    source = tmp_path / "plan-b.yaml"
+    source.write_text(_many_tasks_plan(total), encoding="utf-8")
+    hub = Hub(hub_root)
+    hub.draft_plan(source, "codex", "draft")
+    hub.approve_plan("plan-b")
+    worktree = project(tmp_path / "work-b")
+    for n in range(1, done + 1):
+        hub.claim_task("plan-b", f"task-{n}", "codex", "one", worktree)
+        hub.complete_task("plan-b", f"task-{n}", "codex", "one", "Done", ["commit abc"])
+
+
+def test_plan_show_lists_only_open_tasks_of_a_mostly_completed_plan(
+    active_hub: Path, tmp_path: Path
+) -> None:
+    _finish_tasks(active_hub, tmp_path, 8, 6)
+    lines = _text(active_hub, "plan", "show", "plan-b").splitlines()
+    assert lines[0] == "plan-b · Many tasks"
+    assert lines[1:] == [
+        "Goal: Finish most of it.",
+        "Completed: 6 of 8 task(s); `--task <id>` shows one task, `--full` the whole plan.",
+        "- task-7 [ready, standard] Task number 7",
+        "    - Check 7 passes",
+        "- task-8 [ready, standard] Task number 8",
+        "    - Check 8 passes",
+    ]
+    full = _text(active_hub, "plan", "show", "plan-b", "--full")
+    assert [task["id"] for task in full["tasks"]] == [f"task-{n}" for n in range(1, 9)]
+
+
+def test_plan_show_says_so_when_every_task_is_completed(active_hub: Path, tmp_path: Path) -> None:
+    _finish_tasks(active_hub, tmp_path, 3, 3)
+    out = _text(active_hub, "plan", "show", "plan-b")
+    assert out.splitlines() == [
+        "plan-b · Many tasks",
+        "Goal: Finish most of it.",
+        "All 3 task(s) completed.",
     ]
 
 
@@ -455,8 +510,9 @@ def test_mcp_instructions_are_one_sentence() -> None:
 
 def test_mcp_read_plan_is_compact_by_default(mcp_hub: Path) -> None:
     result = mcp_server.hub_read_plan("plan-a")
-    assert set(result) == {"id", "title", "goal", "tasks"}
+    assert set(result) == {"id", "title", "goal", "tasks", "completed", "total"}
     assert result["id"] == "plan-a" and len(result["goal"]) <= 300
+    assert (result["completed"], result["total"]) == (0, 2)
     assert result["tasks"] == [
         {
             "id": "task-1",
@@ -477,13 +533,22 @@ def test_mcp_read_plan_is_compact_by_default(mcp_hub: Path) -> None:
     ]
 
 
-def test_mcp_read_plan_leaves_acceptance_off_completed_tasks(mcp_hub: Path, tmp_path: Path) -> None:
-    hub = Hub(mcp_hub)
-    worktree = project(tmp_path / "work")
-    hub.claim_task("plan-a", "task-1", "codex", "one", worktree)
-    hub.complete_task("plan-a", "task-1", "codex", "one", "Done", ["commit abc"])
-    first = mcp_server.hub_read_plan("plan-a")["tasks"][0]
-    assert first["status"] == "completed" and "acceptance" not in first
+def test_mcp_read_plan_counts_completed_tasks_and_omits_them(mcp_hub: Path, tmp_path: Path) -> None:
+    _finish_tasks(mcp_hub, tmp_path, 8, 6)
+    result = mcp_server.hub_read_plan("plan-b")
+    assert (result["completed"], result["total"]) == (6, 8)
+    assert [task["id"] for task in result["tasks"]] == ["task-7", "task-8"]
+    assert all(task["status"] == "ready" and task["acceptance"] for task in result["tasks"])
+    assert len(mcp_server.hub_read_plan("plan-b", full=True)["tasks"]) == 8
+    assert mcp_server.hub_read_plan("plan-b", task_id="task-1")["status"] == "completed"
+
+
+def test_mcp_read_plan_returns_no_tasks_when_all_are_completed(
+    mcp_hub: Path, tmp_path: Path
+) -> None:
+    _finish_tasks(mcp_hub, tmp_path, 3, 3)
+    result = mcp_server.hub_read_plan("plan-b")
+    assert result["tasks"] == [] and (result["completed"], result["total"]) == (3, 3)
 
 
 def test_mcp_read_plan_task_id_and_full(mcp_hub: Path) -> None:

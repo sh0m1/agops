@@ -171,15 +171,17 @@ agops task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12
 
 `agops plan list` and `agops task ready [--tier NAME]` show what is available, and
 `agops plan show PLAN [--revision N] [--task TASK] [--full]` prints one plan. The default is
-compact: the goal cut to 300 characters, then one line per task with its status and tier, and the
-acceptance bullets of tasks that are not completed. `--task TASK` prints that task in full with
-its status, owner and latest summary; `--full` prints the whole definition.
+compact: the goal cut to 300 characters, a `Completed: N of M task(s)` line, then one line per
+open task with its status and tier and its acceptance bullets. Completed tasks appear only in
+that count. `--task TASK` prints one task in full (completed ones too) with its status, owner and
+latest summary; `--full` prints the whole definition.
 
 The shell prints short text: `task ready` is one `PLAN/TASK · tier · title` line per task, and
 `claim`, `checkpoint`, `complete` and the other task commands, `page add` and `knowledge add`
 print one line. For scripts, put `--json` before the command to get the full JSON, for example
 `agops --json task ready` or `agops --json plan show PLAN`. The MCP `hub_read_plan` and
-`hub_list_ready_tasks` are compact the same way (`hub_read_plan` takes `task_id` and `full`).
+`hub_list_ready_tasks` are compact the same way (`hub_read_plan` lists open tasks plus
+`completed` and `total` counts, and takes `task_id` and `full`).
 The other task transitions:
 
 ```sh

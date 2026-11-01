@@ -60,8 +60,9 @@ def hub_read_plan(
     task_id: str | None = None,
     full: bool = False,
 ) -> dict:
-    """Read a plan. The default is compact: id, title, goal, and per task its id, title, tier,
-    status and dependencies, with acceptance listed only for tasks that are not completed.
+    """Read a plan. The default is compact: id, title, goal, and per open task its id, title,
+    tier, status, dependencies and acceptance. Completed tasks appear only as the `completed`
+    count next to the `total` count of tasks.
 
     Pass task_id for one task in full (every field plus status, owner and latest summary), or
     full=True for the whole plan definition. Approval is deliberately unavailable through MCP.

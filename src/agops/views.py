@@ -155,10 +155,18 @@ def _open_acceptance(task: Mapping[str, Any]) -> list[str]:
 def compact_plan(
     plan: Mapping[str, Any], plan_state: PlanState | None, policy: TierPolicy | None
 ) -> dict[str, Any]:
-    """The plan without long fields: acceptance is listed only for tasks that are not done."""
+    """The plan without long fields and without finished work.
+
+    Only tasks that are not completed are listed, with their acceptance. Completed tasks appear
+    as the `completed` count next to the `total` count of all tasks.
+    """
     tasks: list[dict[str, Any]] = []
+    completed = 0
     for task in plan["tasks"]:
         status = task_status(plan_state, task["id"])
+        if status == "completed":
+            completed += 1
+            continue
         entry: dict[str, Any] = {
             "id": task["id"],
             "title": task.get("title"),
@@ -166,7 +174,7 @@ def compact_plan(
             "status": status,
             "depends_on": list(task.get("depends_on") or []),
         }
-        if status != "completed" and task.get("acceptance"):
+        if task.get("acceptance"):
             entry["acceptance"] = _open_acceptance(task)
         tasks.append(entry)
     return {
@@ -174,6 +182,8 @@ def compact_plan(
         "title": plan.get("title"),
         "goal": collapse(plan.get("goal"), GOAL_LIMIT),
         "tasks": tasks,
+        "completed": completed,
+        "total": len(plan["tasks"]),
     }
 
 
@@ -181,7 +191,15 @@ def format_plan(
     plan: Mapping[str, Any], plan_state: PlanState | None, policy: TierPolicy | None
 ) -> str:
     compact = compact_plan(plan, plan_state, policy)
+    completed, total = compact["completed"], compact["total"]
     lines = [f"{compact['id']}{_SEP}{compact['title']}", f"Goal: {compact['goal']}"]
+    if total and completed == total:
+        lines.append(f"All {total} task(s) completed.")
+    elif completed:
+        lines.append(
+            f"Completed: {completed} of {total} task(s); "
+            "`--task <id>` shows one task, `--full` the whole plan."
+        )
     for task in compact["tasks"]:
         lines.append(f"- {task['id']} [{task['status']}, {task['tier']}] {collapse(task['title'])}")
         lines.extend(f"    - {item}" for item in task.get("acceptance", []))

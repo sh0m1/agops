@@ -6,18 +6,16 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from .hub import Hub
+from . import views
+from .hub import Hub, task_definition
 from .notes import NotesBridge
-from .state import load_plan
+from .state import load_plan, load_state
 
 SESSION = os.environ.get("AGOPS_SESSION", str(uuid.uuid4()))
 ACTOR = os.environ.get("AGOPS_ACTOR", "mcp-agent")
 INSTRUCTIONS = (
-    "Read hub_get_brief at session start. Claim an approved ready task before writing. "
-    "Checkpoint meaningful progress and complete only with evidence. User instructions override "
-    "stored plans. Never store secrets, .env contents, or raw transcripts. "
-    "Prefer CLI and MCP tools over a browser for external systems; use a browser only when no "
-    "CLI or MCP route exists, it is scoped wrong, or it fails."
+    "Follow the agops rules in your instruction file: read hub_get_brief once per session with "
+    "your model id, claim before you write, and complete only with evidence."
 )
 mcp = FastMCP("agops", instructions=INSTRUCTIONS)
 
@@ -50,15 +48,35 @@ def hub_list_plans() -> list[dict]:
 
 
 @mcp.tool()
-def hub_read_plan(plan_id: str, revision: int | None = None) -> dict:
-    """Read a plan definition. Approval is deliberately unavailable through MCP."""
-    return load_plan(hub().root, plan_id, revision)
+def hub_read_plan(
+    plan_id: str,
+    revision: int | None = None,
+    task_id: str | None = None,
+    full: bool = False,
+) -> dict:
+    """Read a plan. The default is compact: id, title, goal, and per task its id, title, tier,
+    status and dependencies, with acceptance listed only for tasks that are not completed.
+
+    Pass task_id for one task in full (every field plus status, owner and latest summary), or
+    full=True for the whole plan definition. Approval is deliberately unavailable through MCP.
+    """
+    current = hub()
+    plan = load_plan(current.root, plan_id, revision)
+    if full and not task_id:
+        return plan
+    plan_state = load_state(current.root).plans.get(str(plan.get("id", plan_id)))
+    if task_id:
+        return views.task_detail(task_definition(plan, task_id), plan_state)
+    return views.compact_plan(plan, plan_state, views.policy_or_none(current))
 
 
 @mcp.tool()
 def hub_list_ready_tasks(plan_id: str | None = None) -> list[dict]:
-    """List dependency-ready tasks from approved plans."""
-    return hub().ready_tasks(plan_id)
+    """List dependency-ready tasks from approved plans as plan_id, id, title, tier, project and
+    depends_on. Read a task's acceptance with hub_read_plan(plan_id, task_id=...)."""
+    current = hub()
+    policy = views.policy_or_none(current)
+    return [views.compact_ready_task(task, policy) for task in current.ready_tasks(plan_id)]
 
 
 @mcp.tool()
@@ -134,8 +152,14 @@ def hub_add_knowledge(
     supersedes: str | None = None,
     kind: str = "fact",
 ) -> dict:
-    """Add a versioned knowledge entry after secret and size validation."""
-    return hub().add_knowledge(scope, key, title, body, ACTOR, SESSION, supersedes, kind=kind)
+    """Add a versioned knowledge entry after secret and size validation.
+
+    Keep the body under 500 bytes and link a page for detail; a longer body adds a `warning`
+    key to the result.
+    """
+    event = hub().add_knowledge(scope, key, title, body, ACTOR, SESSION, supersedes, kind=kind)
+    warning = views.knowledge_size_warning(body)
+    return {**event, "warning": warning} if warning else event
 
 
 @mcp.tool()

@@ -45,6 +45,41 @@ def test_managed_instructions_require_a_model_declaration() -> None:
     assert "agops page add" in INSTRUCTIONS and "hub_add_page" in INSTRUCTIONS
 
 
+def test_managed_instructions_carry_a_command_reference() -> None:
+    for command in (
+        "agops brief --cwd",
+        "agops session --model",
+        "agops task ready --plan",
+        "agops task claim",
+        "agops task checkpoint",
+        "agops task complete",
+        "agops plan show",
+        "agops search",
+        "agops --json task ready",
+        "agops page add",
+    ):
+        assert command in INSTRUCTIONS
+    assert "## Tool access order" not in INSTRUCTIONS
+    assert len(INSTRUCTIONS.encode()) < 2_000
+
+
+def test_managed_instruction_commands_parse_with_the_real_cli() -> None:
+    from agops import cli
+
+    parse = cli.build_parser().parse_args
+    assert parse(["brief", "--cwd", ".", "--model", "m"]).model == "m"
+    assert parse(["session", "--model", "m"]).model == "m"
+    assert parse(["task", "ready", "--plan", "p"]).plan == "p"
+    assert parse(["task", "claim", "p", "t", "--cwd", "."]).task_id == "t"
+    checkpoint = parse(["task", "checkpoint", "p", "t", "--summary", "s", "--evidence", "e"])
+    assert checkpoint.evidence == ["e"]
+    assert parse(["task", "complete", "p", "t", "--summary", "s", "--evidence", "e"]).evidence
+    assert parse(["plan", "show", "p", "--task", "t"]).task == "t"
+    assert parse(["search", "two", "words"]).query == ["two", "words"]
+    assert parse(["--json", "task", "ready"]).json is True
+    assert parse(["page", "add", "f.html", "--plan", "p", "--task", "t"]).task == "t"
+
+
 # --- end-to-end setup() against a fake home -------------------------------------------------
 
 

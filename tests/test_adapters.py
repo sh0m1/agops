@@ -15,6 +15,8 @@ def test_adapters_preserve_existing_instructions_and_are_idempotent(tmp_path: Pa
     assert "Existing project rules" in agents.read_text(encoding="utf-8")
     assert agents.read_text(encoding="utf-8").count("BEGIN AGOPS MANAGED") == 1
     assert (tmp_path / "CLAUDE.md").exists()
+    assert "agops session --model" in agents.read_text(encoding="utf-8")
+    assert "Tool access order" not in agents.read_text(encoding="utf-8")
     assert "alwaysApply: true" in (tmp_path / ".cursor/rules/agops.mdc").read_text()
 
 

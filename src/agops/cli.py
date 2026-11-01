@@ -10,15 +10,16 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from . import views
 from .adapters import install_adapters
 from .config import load_profiles, resolve_repo, save_profiles
 from .health import INFORMATIONAL, doctor
-from .hub import Hub, read_frontmatter
+from .hub import Hub, read_frontmatter, task_definition
 from .notes import NotesBridge
-from .policy import PolicyError, policy_path
+from .policy import UNKNOWN_TIER, PolicyError, policy_path
 from .sessions import record_session, resolve_model
 from .setup import install_skills, setup
-from .state import load_plan
+from .state import load_plan, load_state
 
 
 def default_session() -> str:
@@ -71,8 +72,10 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     page_add.add_argument("--title")
     page_add.add_argument("--slug")
     session_parser = commands.add_parser("session")
-    session_parser.add_argument("--actor", default="agent")
+    session_parser.add_argument("--actor")
     session_parser.add_argument("--value", action="store_true")
+    session_parser.add_argument("--model", help="Declare this model id for the session")
+    session_parser.add_argument("--session", help="Session id to declare (default: AGOPS_SESSION)")
     brief = commands.add_parser("brief")
     brief.add_argument("--cwd", default=".")
     brief.add_argument("--model", help="Model id of this session, e.g. claude-sonnet-5")
@@ -83,7 +86,7 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     policy_commands.add_parser("validate")
 
     search = commands.add_parser("search")
-    search.add_argument("query")
+    search.add_argument("query", nargs="+", help="Words to look for")
 
     migrate = commands.add_parser("migrate-remember")
     migrate.add_argument("path")
@@ -170,6 +173,8 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     show = plan_commands.add_parser("show")
     show.add_argument("plan_id")
     show.add_argument("--revision", type=int)
+    show.add_argument("--task", help="Show one task in full, with its status")
+    show.add_argument("--full", action="store_true", help="Show the whole plan as JSON")
 
     task = commands.add_parser("task")
     task_commands = task.add_subparsers(dest="task_command", required=True)
@@ -267,8 +272,10 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "sync":
         return hub.sync()
     if args.command == "session":
+        if args.model is not None:
+            return declare_session(hub, args)
         session = str(uuid.uuid4())
-        return session if args.value else {"actor": args.actor, "session": session}
+        return session if args.value else {"actor": args.actor or "agent", "session": session}
     if args.command == "doctor":
         return doctor(hub)
     if args.command == "scan":
@@ -293,9 +300,14 @@ def dispatch(args: argparse.Namespace) -> Any:
         require_human_confirmation(args.plan_id, args.yes, "resolve", noun="plan")
         return bridge.resolve(args.plan_id, args.take, actor, session)
     if args.command == "page":
-        return NotesBridge(hub).add_page(
+        added = NotesBridge(hub).add_page(
             Path(args.file), args.plan, args.task, args.title, args.slug
         )
+        if args.json:
+            return added
+        for warning in added.get("warnings", []):
+            print(f"warning: {warning}", file=sys.stderr)
+        return views.format_page(added)
     if args.command == "brief":
         return hub.brief(
             Path(args.cwd),
@@ -306,7 +318,7 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "policy":
         return policy_report(hub, validate_only=args.policy_command == "validate")
     if args.command == "search":
-        return hub.search(args.query)
+        return hub.search(" ".join(args.query))
     if args.command == "migrate-remember":
         return migrate_remember(hub, Path(args.path), args.project, args.actor)
     if args.command == "project":
@@ -314,17 +326,23 @@ def dispatch(args: argparse.Namespace) -> Any:
     if args.command == "knowledge":
         actor, session = actor_session(args)
         if args.knowledge_command == "retire":
-            return hub.retire_knowledge(args.scope, args.key, args.reason, actor, session)
-        return hub.add_knowledge(
+            event = hub.retire_knowledge(args.scope, args.key, args.reason, actor, session)
+            return event if args.json else views.format_knowledge_event(event)
+        body = Path(args.body_file).read_text(encoding="utf-8")
+        event = hub.add_knowledge(
             args.scope,
             args.key,
             args.title,
-            Path(args.body_file).read_text(encoding="utf-8"),
+            body,
             actor,
             session,
             args.supersedes,
             kind=args.kind,
         )
+        warning = views.knowledge_size_warning(body)
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
+        return event if args.json else views.format_knowledge_event(event)
     if args.command == "plan":
         if args.plan_command == "draft":
             actor, session = actor_session(args)
@@ -346,7 +364,7 @@ def dispatch(args: argparse.Namespace) -> Any:
             return hub.cancel_plan(args.plan_id, args.reason, args.superseded_by)
         if args.plan_command == "list":
             return hub.list_plans()
-        return load_plan(hub.root, args.plan_id, args.revision)
+        return show_plan(hub, args)
     if args.command == "task":
         if args.task_command == "ready":
             tasks = hub.ready_tasks(args.plan)
@@ -357,42 +375,16 @@ def dispatch(args: argparse.Namespace) -> Any:
                 if args.tier not in policy.tiers:
                     raise ValueError(f"Unknown tier: {args.tier}")
                 tasks = [task for task in tasks if policy.task_tier(task) == args.tier]
-            return tasks
+            if args.json:
+                return tasks
+            return views.format_ready_tasks(tasks, views.policy_or_none(hub))
         actor, session = actor_session(args)
-        if args.task_command == "claim":
-            if args.allow_tier_mismatch:
-                if os.environ.get("AGOPS_AGENT_SESSION"):
-                    raise ValueError("Tier override is unavailable inside a managed agent session")
-                require_human_confirmation(
-                    args.task_id,
-                    False,
-                    "override tier for",
-                    noun="task",
-                    flag_hint=None,
-                    label="Tier override",
-                    prompt=f"Override tier for task {args.task_id}? Type its id: ",
-                )
-            return hub.claim_task(
-                args.plan_id,
-                args.task_id,
-                actor,
-                session,
-                Path(args.cwd),
-                allow_tier_mismatch=args.allow_tier_mismatch,
-            )
-        if args.task_command == "checkpoint":
-            return hub.checkpoint_task(
-                args.plan_id, args.task_id, actor, session, args.summary, args.evidence
-            )
-        if args.task_command == "block":
-            return hub.block_task(args.plan_id, args.task_id, actor, session, args.reason)
-        if args.task_command == "unblock":
-            return hub.unblock_task(args.plan_id, args.task_id, actor, session, args.resolution)
-        if args.task_command == "release":
-            return hub.release_task(args.plan_id, args.task_id, actor, session)
-        return hub.complete_task(
-            args.plan_id, args.task_id, actor, session, args.summary, args.evidence
-        )
+        event = run_task_command(hub, args, actor, session)
+        if args.json:
+            return event
+        if event.get("notes_warning"):
+            print(f"warning: {views.collapse(event['notes_warning'], 200)}", file=sys.stderr)
+        return views.format_task_event(event)
     if args.command == "run":
         return run_agent(
             hub,
@@ -405,6 +397,76 @@ def dispatch(args: argparse.Namespace) -> Any:
             args.model,
         )
     raise ValueError(f"Unsupported command: {args.command}")
+
+
+def declare_session(hub: Hub, args: argparse.Namespace) -> Any:
+    """Record this session's model and tier, as `brief --model` does, without a brief."""
+    actor = args.actor or os.environ.get("AGOPS_ACTOR", "agent")
+    session = args.session or os.environ.get("AGOPS_SESSION") or str(uuid.uuid4())
+    model = resolve_model(session, args.model)
+    if not model:
+        raise ValueError("--model needs a model id")
+    policy = hub.policy()
+    tier = policy.tier_for_model(model) if policy is not None else None
+    record_session(session, actor, model, tier)
+    if args.value:
+        return session
+    result: dict[str, Any] = {"session": session, "actor": actor, "model": model, "tier": tier}
+    if tier == UNKNOWN_TIER:
+        result["warning"] = (
+            f"model {model} is not mapped in memory/policy/tiers.yaml; claims will be rejected"
+        )
+    return result if args.json else views.format_session(result)
+
+
+def show_plan(hub: Hub, args: argparse.Namespace) -> Any:
+    plan = load_plan(hub.root, args.plan_id, args.revision)
+    if not args.task and (args.full or args.json):
+        return plan
+    plan_state = load_state(hub.root).plans.get(str(plan.get("id", args.plan_id)))
+    if args.task:
+        detail = views.task_detail(task_definition(plan, args.task), plan_state)
+        return detail if args.json else views.format_task_detail(args.plan_id, detail)
+    return views.format_plan(plan, plan_state, views.policy_or_none(hub))
+
+
+def run_task_command(
+    hub: Hub, args: argparse.Namespace, actor: str, session: str
+) -> dict[str, Any]:
+    if args.task_command == "claim":
+        if args.allow_tier_mismatch:
+            if os.environ.get("AGOPS_AGENT_SESSION"):
+                raise ValueError("Tier override is unavailable inside a managed agent session")
+            require_human_confirmation(
+                args.task_id,
+                False,
+                "override tier for",
+                noun="task",
+                flag_hint=None,
+                label="Tier override",
+                prompt=f"Override tier for task {args.task_id}? Type its id: ",
+            )
+        return hub.claim_task(
+            args.plan_id,
+            args.task_id,
+            actor,
+            session,
+            Path(args.cwd),
+            allow_tier_mismatch=args.allow_tier_mismatch,
+        )
+    if args.task_command == "checkpoint":
+        return hub.checkpoint_task(
+            args.plan_id, args.task_id, actor, session, args.summary, args.evidence
+        )
+    if args.task_command == "block":
+        return hub.block_task(args.plan_id, args.task_id, actor, session, args.reason)
+    if args.task_command == "unblock":
+        return hub.unblock_task(args.plan_id, args.task_id, actor, session, args.resolution)
+    if args.task_command == "release":
+        return hub.release_task(args.plan_id, args.task_id, actor, session)
+    return hub.complete_task(
+        args.plan_id, args.task_id, actor, session, args.summary, args.evidence
+    )
 
 
 def _remote_line(summary: dict[str, Any]) -> str:

@@ -330,3 +330,50 @@ def test_brief_outside_a_project_counts_tasks_per_plan(policy_hub: Path, tmp_pat
     brief = hub.brief(Path("/tmp"), model="claude-opus-5", actor="codex", session="one")
     assert "- tiered: Tiered (2 ready)" in brief
     assert "review: ready" not in brief
+
+
+def test_brief_counts_completed_tasks_and_filters_tiers_among_open_ones(
+    policy_hub: Path, tmp_path: Path
+) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    widgets = _widgets(tmp_path)
+    hub.brief(widgets, model="claude-sonnet-5", actor="codex", session="one")
+    hub.claim_task("tiered", "exec", "codex", "one", widgets)
+    hub.complete_task("tiered", "exec", "codex", "one", "Done.", ["tests pass"])
+
+    standard = hub.brief(widgets, model="claude-sonnet-5", actor="codex", session="one")
+    assert "- tiered: Tiered (1 completed, 1 ready)" in standard
+    assert "exec:" not in standard and "review:" not in standard
+    assert "1 task(s) hidden by tier: 1 frontier" in standard
+
+    frontier = hub.brief(widgets, model="claude-opus-5", actor="codex", session="one")
+    assert "- tiered: Tiered (1 completed, 1 ready)" in frontier
+    assert "review: ready" in frontier and "exec:" not in frontier
+    # The completed standard task is not counted as hidden.
+    assert "hidden by tier" not in frontier
+
+
+def test_brief_counts_cut_plan_lines_that_have_no_listed_task(
+    local_hub: Path, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("AGOPS_MODEL", raising=False)
+    hub = Hub(local_hub)
+    hub.ensure_policy()
+    title = "A deliberately long plan title " * 8
+    for number in range(20):
+        plan_id = f"plan-{number:02d}"
+        source = tmp_path / f"{plan_id}.yaml"
+        source.write_text(
+            f"id: {plan_id}\ntitle: {title}\ngoal: g\ntasks:\n"
+            "  - {id: review, title: Review, project: acme-widgets, read_only: true, "
+            "tier: frontier}\n",
+            encoding="utf-8",
+        )
+        hub.draft_plan(source, "codex", "draft")
+        hub.approve_plan(plan_id)
+    brief = hub.brief(_widgets(tmp_path), model="claude-sonnet-5", actor="codex", session="one")
+    plans = brief.split("## Knowledge")[0].rstrip("\n").splitlines()
+    shown = sum(line.startswith("- plan-") for line in plans)
+    assert 0 < shown < 20
+    assert plans[-1] == f"- … {20 - shown} more plan(s): agops plan list"

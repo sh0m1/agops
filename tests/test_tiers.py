@@ -330,3 +330,25 @@ def test_brief_outside_a_project_counts_tasks_per_plan(policy_hub: Path, tmp_pat
     brief = hub.brief(Path("/tmp"), model="claude-opus-5", actor="codex", session="one")
     assert "- tiered: Tiered (2 ready)" in brief
     assert "review: ready" not in brief
+
+
+def test_brief_counts_completed_tasks_and_filters_tiers_among_open_ones(
+    policy_hub: Path, tmp_path: Path
+) -> None:
+    hub = Hub(policy_hub)
+    _activate_tiered(hub, tmp_path)
+    widgets = _widgets(tmp_path)
+    hub.brief(widgets, model="claude-sonnet-5", actor="codex", session="one")
+    hub.claim_task("tiered", "exec", "codex", "one", widgets)
+    hub.complete_task("tiered", "exec", "codex", "one", "Done.", ["tests pass"])
+
+    standard = hub.brief(widgets, model="claude-sonnet-5", actor="codex", session="one")
+    assert "- tiered: Tiered (1 completed, 1 ready)" in standard
+    assert "exec:" not in standard and "review:" not in standard
+    assert "1 task(s) hidden by tier: 1 frontier" in standard
+
+    frontier = hub.brief(widgets, model="claude-opus-5", actor="codex", session="one")
+    assert "- tiered: Tiered (1 completed, 1 ready)" in frontier
+    assert "review: ready" in frontier and "exec:" not in frontier
+    # The completed standard task is not counted as hidden.
+    assert "hidden by tier" not in frontier

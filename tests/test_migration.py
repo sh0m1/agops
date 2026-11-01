@@ -20,4 +20,5 @@ def test_remember_migration_is_archived_and_omits_empty_now(hub_repo: Path, tmp_
     assert "now.md" not in text
     assert "kind: archive" in text
     assert "Finished work" not in Hub(hub_repo).brief(Path("/tmp"))
-    assert Hub(hub_repo).search("Finished work")
+    assert not Hub(hub_repo).search("Finished work")
+    assert Hub(hub_repo).search("Finished work", include_archives=True)

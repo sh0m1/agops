@@ -11,7 +11,7 @@ import yaml
 from conftest import project as make_project
 
 from agops.config import config_path
-from agops.hub import Hub
+from agops.hub import TODOS_BUDGET, Hub
 from agops.notes import (
     AGOPS_BASE,
     LEGACY_AGOPS_BASE,
@@ -1684,6 +1684,26 @@ def test_brief_shows_a_bounded_todo_section(
     assert lines[1] == f"- shared-plan · {today} · item 0 (More)"
     assert not any("Send the diagram" in line for line in lines)
     assert "## Todos" in hub.brief(tmp_path, max_bytes=1_500)
+
+
+def test_brief_todo_section_stays_within_its_byte_budget(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    _todo_vault(hub, tmp_path)
+    wordy = "\n".join(f"- [ ] {'word ' * 40}{n} [[shared-plan]]" for n in range(10))
+    (tmp_path / "vault" / "Todo" / "ALL.md").write_text(
+        TODO_TEXT + "\n## More\n" + wordy + "\n", encoding="utf-8"
+    )
+    brief = hub.brief(tmp_path)
+    section = brief[brief.index("## Todos") : brief.index("## Knowledge")].rstrip("\n")
+    assert len(("\n" + section).encode()) <= TODOS_BUDGET
+    lines = section.splitlines()
+    shown = [line for line in lines if line.startswith("- shared-plan")]
+    assert 0 < len(shown) < 10
+    assert lines[-1].startswith("- … ") and lines[-1].endswith(" more linked todos")
+    assert "[brief truncated]" not in brief
 
 
 def test_brief_never_creates_notes_settings(

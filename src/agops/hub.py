@@ -38,10 +38,67 @@ from .todos import plain_text
 
 Mutation = Callable[[State], tuple[dict[str, Any], str]]
 TODO_BRIEF_LIMIT = 10
+BRIEF_MAX_BYTES = 10_000
+# Per-section byte budgets (UTF-8). A section adds whole lines and, when it drops some,
+# ends with one "… N more" line. The final `max_bytes` cut is only a safety net.
+PLANS_BUDGET = 4_000
+TODOS_BUDGET = 1_000
+KNOWLEDGE_BUDGET = 4_000
+LATEST_CHARS = 300
+ENTRY_BODY_CHARS = 400
+SEARCH_EXCERPT_CHARS = 300
+BriefItem = tuple[str, str | None]
 
 
 def timestamp() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _clip(text: str, limit: int) -> str:
+    """Collapse whitespace and cut at a word boundary to at most `limit` characters."""
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    head = flat[: limit - 1]
+    if not flat[limit - 1].isspace():
+        cut = head.rfind(" ")
+        if cut > 0:
+            head = head[:cut]
+    return head.rstrip() + "…"
+
+
+def _size(text: str) -> int:
+    """Bytes a block of lines takes in the brief, newlines included."""
+    return len(text.encode("utf-8")) + text.count("\n") + 1
+
+
+def _fit(
+    items: list[BriefItem],
+    budget: int,
+    used: int,
+    marker: Callable[[list[BriefItem]], str | None],
+    force_marker: bool = False,
+) -> list[str]:
+    """Keep the longest prefix of `items` that fits `budget` together with its marker line.
+
+    `used` is what the section already holds. `marker` receives the dropped items and returns
+    the closing line (or None when nothing worth saying was dropped).
+    """
+    prefix = [0]
+    for text, _ in items:
+        prefix.append(prefix[-1] + _size(text))
+    kept = len(items)
+    while True:
+        dropped = items[kept:]
+        closing = marker(dropped) if dropped or force_marker else None
+        total = used + prefix[kept] + (_size(closing) if closing else 0)
+        if total <= budget or kept == 0:
+            break
+        kept -= 1
+    lines = [text for text, _ in items[:kept]]
+    if closing:
+        lines.append(closing)
+    return lines
 
 
 def task_definition(plan: dict[str, Any], task_id: str) -> dict[str, Any]:
@@ -660,30 +717,58 @@ class Hub:
             kind="fact",
         )
 
-    def search(self, query: str, limit: int = 20) -> list[dict[str, str]]:
+    def search(
+        self,
+        query: str,
+        limit: int = 8,
+        include_archives: bool = False,
+        cwd: Path | None = None,
+    ) -> list[dict[str, str]]:
+        """Entries that mention a query word, most mentions first; archives only on request.
+
+        With `cwd`, entries whose scope applies there (its project, that project's workspaces
+        and global) come before the rest; within a group the order is score, then path.
+        """
         words = [word.lower() for word in query.split() if word]
         if not words:
             return []
-        output: list[tuple[int, dict[str, str]]] = []
-        root = self.root / "memory" / "knowledge"
-        if not root.exists():
-            return []
-        for entry in self._current_knowledge(include_archives=True):
-            path = entry["path"]
-            text = entry["text"]
-            lowered = text.lower()
-            score = sum(lowered.count(word) for word in words)
-            if score:
-                output.append(
-                    (score, {"path": str(path.relative_to(self.root)), "excerpt": text[:500]})
-                )
-        ranked = sorted(output, key=lambda item: (-item[0], item[1]["path"]))
-        return [item for _, item in ranked[:limit]]
+        applicable: set[str] = set()
+        if cwd is not None:
+            applicable = set(self._scopes_for(self.project_for_path(cwd)[0]))
+        ranked: list[tuple[int, int, str, dict[str, str]]] = []
+        for entry in self._current_knowledge(include_archives=include_archives):
+            score = sum(entry["text"].lower().count(word) for word in words)
+            if not score:
+                continue
+            path = str(entry["path"].relative_to(self.root))
+            result = {
+                "path": path,
+                "key": str(entry["key"]),
+                "title": str(entry["title"]),
+                "scope": entry["scope_path"],
+                "kind": str(entry["kind"]),
+                "excerpt": _clip(entry["body"], SEARCH_EXCERPT_CHARS),
+            }
+            outside = 0 if entry["scope_path"] in applicable else 1
+            ranked.append((outside if cwd is not None else 0, -score, path, result))
+        ranked.sort(key=lambda item: item[:3])
+        return [item[3] for item in ranked[:limit]]
+
+    def _scopes_for(self, project_id: str | None) -> list[str]:
+        """Knowledge scopes that apply to a project, broadest first (later ones win a key)."""
+        scopes = ["global"]
+        if project_id:
+            scopes.extend(
+                f"workspace/{workspace}"
+                for workspace in sorted(self._workspaces_for_project(project_id))
+            )
+            scopes.append(f"project/{project_id}")
+        return scopes
 
     def brief(
         self,
         cwd: Path,
-        max_bytes: int = 12_000,
+        max_bytes: int = BRIEF_MAX_BYTES,
         model: str | None = None,
         actor: str = "agent",
         session: str | None = None,
@@ -698,6 +783,11 @@ class Hub:
         if resolved_model and session:
             record_session(session, actor, resolved_model, session_tier)
         filtering = policy is not None and session_tier not in {None, UNKNOWN_TIER}
+        # Budgets shrink together when the caller asks for less than their sum, so every
+        # section still shows; the final cut below is only a safety net.
+        budgets = (PLANS_BUDGET, TODOS_BUDGET, KNOWLEDGE_BUDGET)
+        scale = min(1.0, max_bytes / sum(budgets))
+        plans_budget, todos_budget, knowledge_budget = (int(value * scale) for value in budgets)
 
         lines = ["# agops brief", "", f"Project: {project_id or 'unregistered'}"]
         if self.profile:
@@ -726,59 +816,84 @@ class Hub:
             # Outside a registered project no plan is local, so per-task detail is noise
             # that each session pays for; one counted line per plan is enough to orient.
             lines.append("Overview only: run from a registered project or read a plan for tasks.")
+        # Items are (text, plan id of a task line or None); the plans budget decides how
+        # many fit, and a dropped task is counted in the closing line.
+        plan_items: list[BriefItem] = []
         for summary in self.list_plans():
             plan_state = state.plans.get(summary["id"])
             if not plan_state or not plan_state.active:
                 continue
             plan = load_plan(self.root, summary["id"], plan_state.approved_revision)
-            if not project_id:
-                counts: dict[str, int] = {}
-                for task in plan["tasks"]:
-                    task_state = plan_state.tasks.get(task["id"])
-                    status = task_state.status if task_state else "ready"
-                    counts[status] = counts.get(status, 0) + 1
-                detail = ", ".join(f"{count} {status}" for status, count in sorted(counts.items()))
-                lines.append(f"- {summary['id']}: {summary['title']} ({detail})")
-                continue
             relevant = [
                 task
                 for task in plan["tasks"]
                 if not project_id or task.get("project") in {None, project_id, remote}
             ]
-            if not relevant:
+            if project_id and not relevant:
                 continue
-            lines.append(f"- {summary['id']}: {summary['title']}")
+            counts: dict[str, int] = {}
+            for task in relevant:
+                task_state = plan_state.tasks.get(task["id"])
+                status = task_state.status if task_state else "ready"
+                counts[status] = counts.get(status, 0) + 1
+            detail = ", ".join(f"{count} {status}" for status, count in sorted(counts.items()))
+            plan_items.append((f"- {summary['id']}: {summary['title']} ({detail})", None))
+            if not project_id:
+                continue
             hidden: dict[str, int] = {}
             for task in relevant:
+                task_state = plan_state.tasks.get(task["id"])
+                status = task_state.status if task_state else "ready"
+                if status == "completed":
+                    continue
                 if filtering and policy is not None:
                     task_tier = policy.task_tier(task)
                     if task_tier != session_tier:
                         hidden[task_tier] = hidden.get(task_tier, 0) + 1
                         continue
-                task_state = plan_state.tasks.get(task["id"])
-                status = task_state.status if task_state else "ready"
                 owner = f" ({task_state.owner})" if task_state and task_state.owner else ""
-                lines.append(f"  - {task['id']}: {status}{owner} — {task['title']}")
-                if task_state and task_state.summary:
-                    lines.append(f"    Latest: {task_state.summary}")
+                text = f"  - {task['id']}: {status}{owner} — {task['title']}"
+                if status in {"claimed", "blocked"} and task_state and task_state.summary:
+                    text += f"\n    Latest: {_clip(task_state.summary, LATEST_CHARS)}"
+                plan_items.append((text, summary["id"]))
             if hidden:
                 detail = ", ".join(f"{count} {tier}" for tier, count in sorted(hidden.items()))
-                lines.append(f"  - {sum(hidden.values())} task(s) hidden by tier: {detail}")
-            lines.extend(self._page_brief(summary["id"]))
-        # Before knowledge: the byte cut at the end drops the tail first.
-        lines.extend(self._todo_brief(project_id, remote, state))
-        lines.extend(["", "## Knowledge"])
-        allowed = {"global"}
-        if project_id:
-            allowed.add(f"project/{project_id}")
-            for workspace in self._workspaces_for_project(project_id):
-                allowed.add(f"workspace/{workspace}")
+                note = f"  - {sum(hidden.values())} task(s) hidden by tier: {detail}"
+                plan_items.append((note, None))
+            plan_items.extend((page, None) for page in self._page_brief(summary["id"]))
+
+        def plans_marker(dropped: list[BriefItem]) -> str | None:
+            if not project_id:
+                return f"- … {len(dropped)} more plan(s): agops plan list"
+            ids = [plan_id for _, plan_id in dropped if plan_id]
+            if not ids:
+                return None
+            plans = list(dict.fromkeys(ids))
+            if len(plans) == 1:
+                return f"- … {len(ids)} more open task(s): agops task ready --plan {plans[0]}"
+            return (
+                f"- … {len(ids)} more open task(s) in {len(plans)} plans: "
+                "agops task ready --plan <id>"
+            )
+
+        used = sum(_size(line) for line in lines)
+        lines.extend(_fit(plan_items, plans_budget, used, plans_marker))
+        # Before knowledge: the safety cut at the end drops the tail first.
+        lines.extend(self._todo_brief(project_id, remote, state, todos_budget))
+        lines.extend(self._knowledge_brief(project_id, knowledge_budget))
+        result = "\n".join(lines).strip() + "\n"
+        encoded = result.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return result
+        return encoded[: max_bytes - 32].decode("utf-8", errors="ignore") + "\n[brief truncated]\n"
+
+    def _knowledge_brief(self, project_id: str | None, budget: int) -> list[str]:
+        """Knowledge for a project: its own and its workspaces' bodies, then global titles."""
+        lines = ["", "## Knowledge"]
+        current = self._current_knowledge()
         scoped: dict[str, dict[str, Any]] = {}
-        scope_order = ["global"]
-        scope_order.extend(sorted(value for value in allowed if value.startswith("workspace/")))
-        scope_order.extend(sorted(value for value in allowed if value.startswith("project/")))
-        for selected_scope in scope_order:
-            for entry in self._current_knowledge():
+        for selected_scope in self._scopes_for(project_id):
+            for entry in current:
                 if entry["scope_path"] == selected_scope:
                     scoped[entry["key"]] = entry
         # Global preferences are rendered into every client's instruction file by
@@ -795,22 +910,29 @@ class Hub:
                 f"- {len(preferences)} global preference(s) are in your instruction file; "
                 "`agops setup` refreshes it."
             )
-        # Workspace knowledge is the broadest set, so it is listed last and truncated first.
-        display_rank = {"global": 0, "project": 1, "workspace": 2}
+        # Project knowledge is the most specific, then workspace; global is only titles.
+        display_rank = {"project": 0, "workspace": 1, "global": 2}
+        items: list[BriefItem] = []
         for entry in sorted(
             scoped.values(), key=lambda item: display_rank[item["scope_path"].split("/")[0]]
         ):
-            if project_id:
-                lines.append(f"- {entry['body'][:500]}")
+            if entry["scope_path"] == "global":
+                items.append((f"- {entry['title']} ({entry['kind']}, {entry['key']})", None))
             else:
-                lines.append(f"- {entry['title']} ({entry['kind']}, {entry['key']})")
+                items.append((f"- {_clip(entry['body'], ENTRY_BODY_CHARS)}", None))
+        trailer: list[str] = []
         if scoped and not project_id:
-            lines.append("Titles only outside a registered project; search knowledge for bodies.")
-        result = "\n".join(lines).strip() + "\n"
-        encoded = result.encode("utf-8")
-        if len(encoded) <= max_bytes:
-            return result
-        return encoded[: max_bytes - 32].decode("utf-8", errors="ignore") + "\n[brief truncated]\n"
+            trailer.append("Titles only outside a registered project; search knowledge for bodies.")
+        used = sum(_size(line) for line in [*lines, *trailer])
+        lines.extend(
+            _fit(
+                items,
+                budget,
+                used,
+                lambda dropped: f"- … {len(dropped)} more entries: agops search <words>",
+            )
+        )
+        return [*lines, *trailer]
 
     def _page_brief(self, plan_id: str) -> list[str]:
         """The plan's newest pages (title and vault path); a notes problem just hides them."""
@@ -820,7 +942,9 @@ class Hub:
             return []
         return [f"  - Page: {page['title']} — {page['path']}" for page in pages]
 
-    def _todo_brief(self, project_id: str | None, remote: str | None, state: State) -> list[str]:
+    def _todo_brief(
+        self, project_id: str | None, remote: str | None, state: State, budget: int
+    ) -> list[str]:
         """A few open todos from the user's todo file that link open plans."""
         try:
             bridge = NotesBridge(self)
@@ -881,12 +1005,12 @@ class Hub:
             f"Inbox · {len(linked)} linked to open plans",
         ]
         tops = sorted((index for index in linked if top(index)), key=rank)
-        shown = 0
+        shown: list[BriefItem] = []
         for index in tops:
             item = items[index]
             if any(pattern.search(item.text) for pattern in SECRET_PATTERNS):
                 continue
-            if shown == TODO_BRIEF_LIMIT:
+            if len(shown) == TODO_BRIEF_LIMIT:
                 break
             plan = next(plan for plan in item.plans if plan in open_plans)
             where = " › ".join([*item.headings, *([item.group] if item.group else [])])
@@ -895,10 +1019,18 @@ class Hub:
             more = descendants(index)
             extra = f" (+{more} sub-items)" if more else ""
             line = f"- {plan} · {dates[index]} · {text}{extra}"
-            lines.append(line + (f" ({where})" if where else ""))
-            shown += 1
-        if len(tops) > shown:
-            lines.append(f"- … {len(tops) - shown} more linked todos")
+            shown.append((line + (f" ({where})" if where else ""), None))
+        beyond = len(tops) - len(shown)
+        used = sum(_size(line) for line in lines)
+        lines.extend(
+            _fit(
+                shown,
+                budget,
+                used,
+                lambda dropped: f"- … {len(dropped) + beyond} more linked todos",
+                force_marker=beyond > 0,
+            )
+        )
         return lines
 
     def _current_knowledge(self, include_archives: bool = False) -> list[dict[str, Any]]:

@@ -24,7 +24,8 @@ tasks:
 
 
 def _run(hub_repo: Path, *argv: str):
-    args = cli.build_parser().parse_args(["--repo", str(hub_repo), *argv])
+    """Dispatch with --json so tests read the full data; text output has its own tests."""
+    args = cli.build_parser().parse_args(["--repo", str(hub_repo), "--json", *argv])
     return cli.dispatch(args)
 
 
@@ -172,3 +173,13 @@ def test_agops_cli_name_and_json_after_health_command() -> None:
     for command in ("doctor", "scan"):
         assert parser.parse_args([command, "--json"]).json is True
         assert parser.parse_args(["--json", command]).json is True
+
+
+def test_session_parser_takes_model_and_session_and_plan_show_takes_task_and_full() -> None:
+    parser = cli.build_parser()
+    args = parser.parse_args(["session", "--model", "m", "--session", "s", "--actor", "a"])
+    assert (args.model, args.session, args.actor) == ("m", "s", "a")
+    assert parser.parse_args(["session"]).model is None
+    shown = parser.parse_args(["plan", "show", "p", "--task", "t", "--full", "--revision", "2"])
+    assert (shown.task, shown.full, shown.revision) == ("t", True, 2)
+    assert parser.parse_args(["plan", "show", "p"]).full is False

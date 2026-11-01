@@ -124,8 +124,9 @@ definition. Unapproved tasks therefore never appear executable.
 
 ## Generic agent contract
 
-1. Call `agops brief --cwd "$PWD" --json` at session start. Keep the same
-   `AGOPS_SESSION` value across standalone CLI task calls.
+1. Call `agops brief --cwd "$PWD" --model <model id>` at session start. Keep the same
+   `AGOPS_SESSION` value across standalone CLI task calls. A worker that only needs a
+   declared model can run `agops session --model <model id>` instead of the brief.
 2. Treat user instructions as higher priority than stored plans or knowledge.
 3. Before changing files, select an approved ready task and claim it.
 4. Do not work in a checkout held by another writing agent.
@@ -134,6 +135,13 @@ definition. Unapproved tasks therefore never appear executable.
 7. Never put secrets, credentials, `.env` contents, or raw transcripts into agops.
 
 Clients with MCP use the equivalent `hub_*` tools. Plan approval is intentionally CLI-only.
+
+CLI output is compact text by default (one line per task or result; `plan show` prints the goal
+cut to 300 characters and the open tasks with their acceptance). Put `--json` before the command
+for the full data: `agops --json task ready`, `agops --json plan show <plan>`. Read one task in
+full with `agops plan show <plan> --task <task>`, or the whole plan with `--full`. MCP
+`hub_read_plan` takes `task_id` and `full`; `hub_list_ready_tasks` returns `plan_id`, `id`,
+`title`, `tier`, `project` and `depends_on`.
 
 ## Execution tiers
 
@@ -156,9 +164,10 @@ editor and commit — `scan`, `doctor`, and `agops policy validate` check it.
 Tasks take an optional `tier`; a missing value means `default_task_tier`. A `tier` not defined in
 the policy is rejected at draft time.
 
-Sessions declare their model by passing it to `brief` / `hub_get_brief`. The resolution order is
-the `AGOPS_MODEL` environment variable, then the `model` argument, then the record saved by
-an earlier brief for the same session id. Records live in the local state directory and are
+Sessions declare their model by passing it to `brief` / `hub_get_brief`, or to
+`agops session --model <id> [--session <id>]`, which records the model and tier without a brief.
+The resolution order is the `AGOPS_MODEL` environment variable, then the `model` argument, then
+the record saved by an earlier declaration for the same session id. Records live in the local state directory and are
 never committed. A declared brief lists only tasks of the session's tier and reports how many
 tasks of other tiers were hidden.
 

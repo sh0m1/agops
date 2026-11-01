@@ -85,7 +85,8 @@ Only `global` scope is rendered. Those files are loaded for every session whatev
 starts in, so a `workspace:` or `project:` preference would leak into unrelated work; scoped
 preferences reach agents through the brief and the hook below, which resolve scope per session.
 
-Keep an entry under 500 characters — the brief excerpts longer bodies. The brief leaves global
+Keep an entry under 500 characters — the brief excerpts longer bodies, and `agops knowledge add`
+(and `hub_add_knowledge`) warns when a body is over 500 bytes. The brief leaves global
 preferences to the instruction files and only counts them. Outside a registered project it lists
 one line of task counts per active plan and knowledge titles without bodies, so a session started
 in a home folder does not load every plan's task history.
@@ -154,10 +155,12 @@ to call `hub_get_brief` at session start, claim a task before writing, checkpoin
 complete with evidence — all through the MCP server that `setup` registered. You approve plans
 and edit the tier policy; the agents do the rest.
 
-From a shell — for humans, or for agents without MCP — the same contract is four commands. The
-session id defaults to one stable for the terminal, so nothing needs exporting:
+From a shell — for humans, or for agents without MCP — the same contract is a few commands. The
+session id defaults to one stable for the terminal, so nothing needs exporting. A worker that
+only needs to declare its model (a claim needs one) can skip the brief:
 
 ```sh
+agops session --model gpt-5.6-terra   # declare the model and tier; no brief needed
 agops brief --cwd "$PWD" --model gpt-5.6-terra
 agops task claim PLAN TASK --cwd "$PWD"
 agops task checkpoint PLAN TASK --summary "Implemented parser" --evidence "pytest: 12 passed"
@@ -167,7 +170,17 @@ agops task complete PLAN TASK --evidence "commit: abc123" --evidence "pytest: 12
 ![Task life cycle: a human approves a draft plan; a claim checks the tier and takes a 60-minute lease; checkpoints renew it; completion needs evidence; block, unblock, release and lease expiry return a task to ready.](docs/task-lifecycle.svg)
 
 `agops plan list` and `agops task ready [--tier NAME]` show what is available, and
-`agops plan show PLAN [--revision N]` prints one plan's definition. The other task transitions:
+`agops plan show PLAN [--revision N] [--task TASK] [--full]` prints one plan. The default is
+compact: the goal cut to 300 characters, then one line per task with its status and tier, and the
+acceptance bullets of tasks that are not completed. `--task TASK` prints that task in full with
+its status, owner and latest summary; `--full` prints the whole definition.
+
+The shell prints short text: `task ready` is one `PLAN/TASK · tier · title` line per task, and
+`claim`, `checkpoint`, `complete` and the other task commands, `page add` and `knowledge add`
+print one line. For scripts, put `--json` before the command to get the full JSON, for example
+`agops --json task ready` or `agops --json plan show PLAN`. The MCP `hub_read_plan` and
+`hub_list_ready_tasks` are compact the same way (`hub_read_plan` takes `task_id` and `full`).
+The other task transitions:
 
 ```sh
 agops task block PLAN TASK --reason "Waiting for VPC peering"  # owner stops; task is blocked
@@ -176,11 +189,12 @@ agops task release PLAN TASK                                   # owner gives the
 ```
 
 Set `AGOPS_ACTOR` to name the agent and `AGOPS_SESSION` to pin a session id explicitly;
-`agops session` prints a new id (`--value` prints the id only). `AGOPS_MODEL`, when set, takes
-precedence over `--model` for `brief` and `run`. Per-session records, such as the declared
+`agops session` prints a new id (`--value` prints the id only). `agops session --model ID
+[--session ID] [--actor NAME]` declares the model for `--session`, else `AGOPS_SESSION`, else a new
+id. `AGOPS_MODEL`, when set, takes precedence over `--model` for `brief`, `session` and `run`. Per-session records, such as the declared
 model, are kept in `~/.local/state/agops/sessions`; `AGOPS_STATE_DIR` moves the parent directory.
 
-`agops search "words"` ranks the knowledge entries, archives included, by how often the words
+`agops search words` ranks the knowledge entries, archives included, by how often the words
 appear in them. `agops migrate-remember PATH --project ID` imports the Markdown files of an old
 `.remember` journal into one `archive` entry of that project. A second import supersedes the
 first.

@@ -2008,3 +2008,88 @@ def test_docs_mapping_skips_unusable_and_repeated_names_and_keeps_the_rest() -> 
 def test_docs_setting_of_the_wrong_shape_warns_and_yields_nothing(raw: object) -> None:
     entries, warnings = _docs_entries(raw)
     assert entries == [] and "docs must be a list" in warnings[0]
+
+
+def _two_repo_docs(tmp_path: Path, shared: bool) -> tuple[Path, Path]:
+    """Two repository docs folders that are both called `docs`."""
+    folders = []
+    for repo, extra in (("a", "alpha"), ("b", "beta")):
+        folder = tmp_path / repo / "docs"
+        folder.mkdir(parents=True)
+        (folder / f"{extra}.md").write_text(f"# {extra}\n")
+        if shared:
+            (folder / "guide.md").write_text(f"# Guide {repo}\n")
+        folders.append(folder)
+    return folders[0], folders[1]
+
+
+def test_docs_mapping_mirrors_same_named_folders_side_by_side(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    first, second = _two_repo_docs(tmp_path, shared=True)
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    (vault / "notes.yaml").write_text(
+        f"docs:\n  projecta: {first}\n  projectb: {second}\n", encoding="utf-8"
+    )
+
+    for _ in range(2):  # the second pass must not make the two sources overwrite each other
+        result = bridge.render_all()
+        assert result["warnings"] == []
+        assert result["mirrored"]["docs"] == 4
+        assert (vault / "docs/projecta/guide (projecta).md").read_text() == "# Guide a\n"
+        assert (vault / "docs/projectb/guide (projectb).md").read_text() == "# Guide b\n"
+        assert (vault / "docs/projecta/alpha (projecta).md").is_file()
+        assert (vault / "docs/projectb/beta (projectb).md").is_file()
+        assert not (vault / "docs" / "docs").exists()
+    index = (vault / "Docs.md").read_text(encoding="utf-8")
+    assert "\n## projecta\n" in index and "\n## projectb\n" in index
+
+
+def test_docs_list_with_same_named_folders_warns_and_still_merges(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    first, second = _two_repo_docs(tmp_path, shared=False)
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    (vault / "notes.yaml").write_text(f"docs:\n  - {first}\n  - {second}\n", encoding="utf-8")
+
+    result = bridge.render_all()
+    clash = f"{second} and {first} are both mirrored into docs/docs/"
+    assert any(clash in warning for warning in result["warnings"])
+    merged = sorted(p.name for p in (vault / "docs" / "docs").iterdir())
+    assert merged == ["alpha (docs).md", "beta (docs).md"]
+
+
+def test_switching_a_docs_list_to_a_mapping_moves_the_copies(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    source = tmp_path / "reference"
+    source.mkdir()
+    (source / "notes.md").write_text("# Notes\n")
+    (source / "other.md").write_text("# Other\n")
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    vault = tmp_path / "vault"
+    settings = vault / "notes.yaml"
+    settings.write_text(f"docs:\n  - {source}\n", encoding="utf-8")
+    assert bridge.render_all()["warnings"] == []
+    old = vault / "docs" / "reference"
+    assert (old / "notes (reference).md").is_file() and (old / "other (reference).md").is_file()
+    (old / "notes (reference).md").write_text("# Notes\n\nMy edit.\n")
+
+    settings.write_text(f"docs:\n  ref: {source}\n", encoding="utf-8")
+    result = bridge.render_all()
+    assert (vault / "docs/ref/notes (ref).md").is_file()
+    assert (vault / "docs/ref/other (ref).md").is_file()
+    assert not (old / "other (reference).md").exists()  # unedited copy removed
+    assert (old / "notes (reference).md").read_text() == "# Notes\n\nMy edit.\n"  # edit kept
+    assert any(
+        "docs/reference/notes (reference).md: source removed; the edited copy is kept" in w
+        for w in result["warnings"]
+    )

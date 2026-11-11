@@ -2706,9 +2706,10 @@ class NotesBridge:
         sources: list[tuple[str | None, str]],
         warnings: list[str],
     ) -> list[dict[str, Any]]:
-        """Copy each configured docs folder read-only into `docs/<folder>/`.
+        """Copy each configured docs folder read-only into `docs/<name>/`.
 
-        Markdown and images only; dot files, symlinks, and files with credential patterns are
+        `<name>` is the mapping key, or for a list entry the folder's own name. Markdown and
+        images only; dot files, symlinks, and files with credential patterns are
         skipped. A Markdown copy is named after its folder too (see `_doc_name`) so it never
         shares a plan's or a note's name, and links between the docs follow the new names. A
         copy edited in the vault is kept and no longer refreshed; a copy whose source is gone
@@ -2718,7 +2719,8 @@ class NotesBridge:
         produced: dict[str, str] = {}
         docs: list[dict[str, Any]] = []
         root = target.resolve()
-        for _, raw in sources:
+        claimed: dict[str, str] = {}
+        for name, raw in sources:
             source = Path(raw).expanduser().resolve()
             if not source.is_dir():
                 warnings.append(f"docs: {raw} is not a folder")
@@ -2726,7 +2728,16 @@ class NotesBridge:
             if source.is_relative_to(root) or root.is_relative_to(source):
                 warnings.append(f"docs: {raw} overlaps the notes folder")
                 continue
-            folder = _workspace_dir(source.name)
+            # A mapping names the folder; a list entry is named after the folder itself.
+            folder = name or _workspace_dir(source.name)
+            label = name or source.name
+            if folder in claimed:
+                warnings.append(
+                    f"docs: {raw} and {claimed[folder]} are both mirrored into "
+                    f"{DOCS_DIR}/{folder}/; files with the same path overwrite each other "
+                    "(give the folders names in a mapping)"
+                )
+            claimed.setdefault(folder, raw)
             files: list[Path] = []
             for directory, dirnames, filenames in os.walk(source):
                 dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
@@ -2740,7 +2751,7 @@ class NotesBridge:
             for file in files:
                 if file.suffix.lower() == ".md":
                     inner = file.relative_to(source).as_posix()
-                    renamed[inner] = _doc_name(inner, source.name)
+                    renamed[inner] = _doc_name(inner, label)
             for file in files:
                 suffix = file.suffix.lower()
                 inner = file.relative_to(source).as_posix()

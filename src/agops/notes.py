@@ -440,6 +440,8 @@ NOTES_SETTINGS = """\
 #   docs:
 #     projecta: ~/work/a/docs
 #     projectb: ~/work/b/docs
+# The entry named pages (a folder called pages, or the name pages in a mapping) is where
+# `agops page add` stores pages.
 docs: []
 #
 # topics: tags plans and knowledge (topic/<name>) and groups Knowledge.md. A note gets a
@@ -1725,11 +1727,13 @@ class NotesBridge:
         todos, load_warnings = self._load_todos(target, settings, plan_ids)
         return todos, [*todo_warnings, *load_warnings]
 
-    def pages_dir(self, target: Path | None = None) -> tuple[Path, bool]:
-        """Where pages are stored, and whether sync mirrors that folder into the vault.
+    def pages_dir(self, target: Path | None = None) -> tuple[Path, bool, str]:
+        """Where pages are stored, whether sync mirrors that folder, and its vault folder name.
 
-        The first `docs:` folder named `pages`, else `.local/share/agops/pages` in the
-        agops home (AGOPS_HOME overrides the user's home, as for the other tool files).
+        The first `docs:` entry named `pages` - the mapping key, or for a list entry the
+        folder's own name - else `.local/share/agops/pages` in the agops home (AGOPS_HOME
+        overrides the user's home, as for the other tool files). The third value is the
+        `docs/<name>/` folder the pages are mirrored into.
         """
         if target is None:
             try:
@@ -1738,11 +1742,12 @@ class NotesBridge:
                 target = None
         if target is not None:
             settings, _ = _load_settings(target, create=False)
-            for _, raw in settings["docs"]:
+            for name, raw in settings["docs"]:
                 folder = Path(raw).expanduser()
-                if folder.name == "pages":
-                    return folder, True
-        return default_home() / DEFAULT_PAGES_DIR, False
+                # A mapping decides by its key, so its folder may have any name.
+                if (name or folder.name) == "pages":
+                    return folder, True, name or _workspace_dir(folder.name)
+        return default_home() / DEFAULT_PAGES_DIR, False, "pages"
 
     def add_page(
         self,
@@ -1785,7 +1790,7 @@ class NotesBridge:
             target = self.target()
         except ValueError:  # an explicit --repo hub has no notes profile
             target = None
-        folder, mirrored = self.pages_dir(target)
+        folder, mirrored, vault_folder = self.pages_dir(target)
         destination = folder / f"{plan_id}-{name}{PAGE_SUFFIX}"
         _atomic_write(destination, _tag_page(text, plan_id, task_id, title))
         result: dict[str, Any] = {"page": str(destination), "warnings": warnings}
@@ -1793,12 +1798,15 @@ class NotesBridge:
             warnings.append("No notes target is connected; the page is stored but not linked")
             return result
         if not mirrored:
-            warnings.append(f"Add {folder} to docs: in {target / SETTINGS_FILE} to link pages")
+            warnings.append(
+                f"Add {folder} to docs: in {target / SETTINGS_FILE} (as a folder named pages, "
+                "or under the name pages in a mapping) to link pages"
+            )
         rendered = self.render_all()
         result.update(rendered)
         result["warnings"] = [*warnings, *rendered["warnings"]]
         if mirrored:
-            vault = f"{DOCS_DIR}/{_workspace_dir(folder.name)}/{destination.name}"
+            vault = f"{DOCS_DIR}/{vault_folder}/{destination.name}"
             result["vault_path"] = str(target / vault)
         return result
 
@@ -1807,7 +1815,7 @@ class NotesBridge:
         target = self.target()
         if target is None:
             return []
-        folder, mirrored = self.pages_dir(target)
+        folder, mirrored, vault_folder = self.pages_dir(target)
         if not mirrored or not folder.is_dir():
             return []
         ids = {summary["id"] for summary in self.hub.list_plans()} | {plan_id}
@@ -1826,7 +1834,7 @@ class NotesBridge:
                         "title": " ".join(html.unescape(title.group(1)).split())
                         if title
                         else file.stem,
-                        "path": str(target / DOCS_DIR / _workspace_dir(folder.name) / file.name),
+                        "path": str(target / DOCS_DIR / vault_folder / file.name),
                     },
                 )
             )

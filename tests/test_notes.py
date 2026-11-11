@@ -2093,3 +2093,49 @@ def test_switching_a_docs_list_to_a_mapping_moves_the_copies(
         "docs/reference/notes (reference).md: source removed; the edited copy is kept" in w
         for w in result["warnings"]
     )
+
+
+def test_a_mapping_entry_named_pages_is_the_pages_dir_whatever_its_folder_is_called(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    output = tmp_path / "agent-output"
+    (tmp_path / "vault" / "notes.yaml").write_text(f"docs:\n  pages: {output}\n", encoding="utf-8")
+    source = tmp_path / "draft.html"
+    source.write_text("<html><head><title>Flow</title></head><body>x</body></html>")
+
+    result = bridge.add_page(source, "shared-plan", None, None, "flow")
+
+    stored = output / "shared-plan-flow.html"
+    assert result["page"] == str(stored) and stored.is_file()
+    vault_page = tmp_path / "vault" / "docs" / "pages" / stored.name  # the key, not the folder
+    assert result["vault_path"] == str(vault_page) and vault_page.is_file()
+    assert not (tmp_path / "vault" / "docs" / "agent-output").exists()
+    assert "[Flow](../../docs/pages/shared-plan-flow.html)" in (
+        tmp_path / "vault" / "plans" / "active" / "shared-plan.md"
+    ).read_text(encoding="utf-8")
+    hub.approve_plan("shared-plan")
+    brief = hub.brief(make_project(tmp_path / "widgets"))
+    assert f"Page: Flow — {vault_page}" in brief
+
+
+def test_a_mapping_name_other_than_pages_is_not_the_pages_dir_even_for_a_pages_folder(
+    local_hub: Path, plan_file: Path, fake_home: Path, tmp_path: Path
+) -> None:
+    hub = Hub(local_hub, profile="default")
+    hub.draft_plan(plan_file, "codex", "one")
+    bridge = _connected(hub, tmp_path / "vault")
+    folder = tmp_path / "pages"
+    (tmp_path / "vault" / "notes.yaml").write_text(
+        f"docs:\n  agent-pages: {folder}\n", encoding="utf-8"
+    )
+    source = tmp_path / "draft.html"
+    source.write_text("<html><head><title>Flow</title></head><body>x</body></html>")
+
+    result = bridge.add_page(source, "shared-plan", None, None, "flow")
+
+    stored = fake_home / ".local" / "share" / "agops" / "pages" / "shared-plan-flow.html"
+    assert result["page"] == str(stored) and "vault_path" not in result
+    assert any("under the name pages in a mapping" in warning for warning in result["warnings"])

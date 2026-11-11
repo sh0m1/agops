@@ -433,8 +433,13 @@ NOTES_SETTINGS = """\
 # docs: folders of Markdown (and the images they use) copied read-only into
 # docs/<folder name>/ on every sync, so vault search and plan notes reach long-form
 # documents. Edit the source folder: a copy edited in the vault is no longer refreshed.
+# Give a list of folders (each is named after the folder itself), or a mapping of name to
+# folder to choose the names, which you need when two folders are called the same:
 #   docs:
 #     - ~/work/agent-knowledge
+#   docs:
+#     projecta: ~/work/a/docs
+#     projectb: ~/work/b/docs
 docs: []
 #
 # topics: tags plans and knowledge (topic/<name>) and groups Knowledge.md. A note gets a
@@ -1259,6 +1264,46 @@ def _plan_overview(
     }
 
 
+def _docs_entries(raw: Any) -> tuple[list[tuple[str | None, str]], list[str]]:
+    """The `docs:` setting as (name, folder) pairs, and warnings about what was unusable.
+
+    A list gives each folder the name None: the mirror then names it after the folder itself,
+    as it always has. A mapping gives the name explicitly (`name: folder`), slugged. A mapping
+    entry with a bad key or value, or a key that slugs to a name already used, is skipped with
+    a warning; the other entries stay.
+    """
+    if not raw:
+        return [], []
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return [(None, item) for item in raw], []
+    if not isinstance(raw, dict):
+        return [], [
+            f"{SETTINGS_FILE}: docs must be a list of folder paths "
+            "or a mapping of name to folder path"
+        ]
+    entries: list[tuple[str | None, str]] = []
+    warnings: list[str] = []
+    used: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            warnings.append(f"{SETTINGS_FILE}: docs entry {key!r} must map a name to a folder path")
+            continue
+        try:
+            name = slug(key)
+        except ValueError:
+            warnings.append(f"{SETTINGS_FILE}: docs name {key!r} is not usable as a folder name")
+            continue
+        if name in used:
+            warnings.append(
+                f"{SETTINGS_FILE}: docs names {used[name]!r} and {key!r} are both {name!r}; "
+                f"{key!r} is skipped"
+            )
+            continue
+        used[name] = key
+        entries.append((name, value))
+    return entries, warnings
+
+
 def _load_settings(target: Path, create: bool = True) -> tuple[dict[str, Any], list[str]]:
     """`notes.yaml`: docs folders, topic rules and the todo list. Written once, then user-owned.
 
@@ -1277,11 +1322,8 @@ def _load_settings(target: Path, create: bool = True) -> tuple[dict[str, Any], l
     if not isinstance(data, dict):
         return settings, [f"{SETTINGS_FILE} must be a YAML mapping"]
     warnings: list[str] = []
-    docs = data.get("docs") or []
-    if isinstance(docs, list) and all(isinstance(item, str) for item in docs):
-        settings["docs"] = docs
-    else:
-        warnings.append(f"{SETTINGS_FILE}: docs must be a list of folder paths")
+    settings["docs"], docs_warnings = _docs_entries(data.get("docs"))
+    warnings.extend(docs_warnings)
     settings["todos"], todo_warnings = normalize_settings(data.get("todos"))
     warnings.extend(todo_warnings)
     topics = data.get("topics") or {}
@@ -1696,7 +1738,7 @@ class NotesBridge:
                 target = None
         if target is not None:
             settings, _ = _load_settings(target, create=False)
-            for raw in settings["docs"]:
+            for _, raw in settings["docs"]:
                 folder = Path(raw).expanduser()
                 if folder.name == "pages":
                     return folder, True
@@ -2658,7 +2700,11 @@ class NotesBridge:
         return removed
 
     def _mirror_docs(
-        self, target: Path, sidecar: dict[str, Any], sources: list[str], warnings: list[str]
+        self,
+        target: Path,
+        sidecar: dict[str, Any],
+        sources: list[tuple[str | None, str]],
+        warnings: list[str],
     ) -> list[dict[str, Any]]:
         """Copy each configured docs folder read-only into `docs/<folder>/`.
 
@@ -2672,7 +2718,7 @@ class NotesBridge:
         produced: dict[str, str] = {}
         docs: list[dict[str, Any]] = []
         root = target.resolve()
-        for raw in sources:
+        for _, raw in sources:
             source = Path(raw).expanduser().resolve()
             if not source.is_dir():
                 warnings.append(f"docs: {raw} is not a folder")

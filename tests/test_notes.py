@@ -20,6 +20,7 @@ from agops.notes import (
     PREVIOUS_AGOPS_BASE,
     RETIRE_MIN_AGE_DAYS,
     NotesBridge,
+    _docs_entries,
     _primary_topic,
     hub_fingerprint,
     link_plan,
@@ -1981,3 +1982,29 @@ def test_page_add_works_on_a_hub_opened_with_an_explicit_repo(
     assert result["page"] == str(stored) and stored.is_file()
     assert any("No notes target" in warning for warning in result["warnings"])
     assert "vault_path" not in result
+
+
+def test_docs_setting_accepts_a_list_or_a_name_to_folder_mapping() -> None:
+    assert _docs_entries(None) == ([], [])
+    assert _docs_entries(["~/a/docs", "~/b/docs"]) == (
+        [(None, "~/a/docs"), (None, "~/b/docs")],
+        [],
+    )
+    entries, warnings = _docs_entries({"Project A": "~/a/docs", "projectb": "~/b/docs"})
+    assert entries == [("project-a", "~/a/docs"), ("projectb", "~/b/docs")]
+    assert warnings == []
+
+
+def test_docs_mapping_skips_unusable_and_repeated_names_and_keeps_the_rest() -> None:
+    entries, warnings = _docs_entries(
+        {"Project A": "~/a", "project-a": "~/b", "!!": "~/c", "d": 5, "ok": "~/e"}
+    )
+    assert entries == [("project-a", "~/a"), ("ok", "~/e")]
+    assert len(warnings) == 3
+    assert any("'Project A' and 'project-a' are both 'project-a'" in item for item in warnings)
+
+
+@pytest.mark.parametrize("raw", ["nope", 3, ["a", 1]])
+def test_docs_setting_of_the_wrong_shape_warns_and_yields_nothing(raw: object) -> None:
+    entries, warnings = _docs_entries(raw)
+    assert entries == [] and "docs must be a list" in warnings[0]

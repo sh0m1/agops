@@ -178,9 +178,11 @@ YAML, and is used for exactly three things:
    (`scope.projects` plus each task's `project`). One workspace gives that name, several give a
    comma-joined list, none falls back to the plan id's first `-` segment. Open plans are shown
    by workspace, finished plans are archived under `plans/archive/<workspace>/`.
-3. **Sub-project inheritance.** An unregistered project id inherits the workspace of the
-   longest registered project id that is a prefix of it plus `-`
-   (`acme-stack-backend` inherits from `acme-stack`).
+3. **Sub-project grouping.** For vault grouping, an unregistered project id uses the
+   workspace of the longest registered project id that is a prefix of it plus `-`
+   (`acme-stack-backend` groups with `acme-stack`). This fallback does not apply to
+   knowledge selection. Register each child project with `--workspace`, or list it in a
+   workspace group file, to include workspace knowledge in its brief.
 
 Convention: use one lowercase token per product or team (`acme`, `platform`). A project
 registered via `--workspace` has exactly one workspace. A project can additionally be listed
@@ -290,9 +292,11 @@ plans are read-only history and are never imported.
 
 - Task state is keyed by task id: a task completed in rev 1 stays completed in rev 2 if the
   id is kept.
-- Changed task text takes effect for claims made after approval. An existing claim is not
-  interrupted.
-- A task removed from the revision is ignored (its state stays in history, it no longer counts).
+- Approval switches the definition used by all task operations, including existing claims.
+  A retained task keeps its claim, but subsequent operations use its new definition.
+- Release active claims before you remove their tasks from a new revision. After approval,
+  a removed task no longer counts. Its history stays, but checkpoint, heartbeat, release
+  and completion fail with `Unknown task`.
 - Approving a new revision of a *completed* plan clears its `completed` flag, so the plan
   reopens when the new revision adds unfinished tasks.
 - Until approval the vault shows the new definition under "Needs you" with the added,

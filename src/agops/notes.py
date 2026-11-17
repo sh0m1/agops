@@ -433,8 +433,15 @@ NOTES_SETTINGS = """\
 # docs: folders of Markdown (and the images they use) copied read-only into
 # docs/<folder name>/ on every sync, so vault search and plan notes reach long-form
 # documents. Edit the source folder: a copy edited in the vault is no longer refreshed.
+# Give a list of folders (each is named after the folder itself), or a mapping of name to
+# folder to choose the names, which you need when two folders are called the same:
 #   docs:
 #     - ~/work/agent-knowledge
+#   docs:
+#     projecta: ~/work/a/docs
+#     projectb: ~/work/b/docs
+# The entry named pages (a folder called pages, or the name pages in a mapping) is where
+# `agops page add` stores pages.
 docs: []
 #
 # topics: tags plans and knowledge (topic/<name>) and groups Knowledge.md. A note gets a
@@ -1259,6 +1266,46 @@ def _plan_overview(
     }
 
 
+def _docs_entries(raw: Any) -> tuple[list[tuple[str | None, str]], list[str]]:
+    """The `docs:` setting as (name, folder) pairs, and warnings about what was unusable.
+
+    A list gives each folder the name None: the mirror then names it after the folder itself,
+    as it always has. A mapping gives the name explicitly (`name: folder`), slugged. A mapping
+    entry with a bad key or value, or a key that slugs to a name already used, is skipped with
+    a warning; the other entries stay.
+    """
+    if not raw:
+        return [], []
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return [(None, item) for item in raw], []
+    if not isinstance(raw, dict):
+        return [], [
+            f"{SETTINGS_FILE}: docs must be a list of folder paths "
+            "or a mapping of name to folder path"
+        ]
+    entries: list[tuple[str | None, str]] = []
+    warnings: list[str] = []
+    used: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            warnings.append(f"{SETTINGS_FILE}: docs entry {key!r} must map a name to a folder path")
+            continue
+        try:
+            name = slug(key)
+        except ValueError:
+            warnings.append(f"{SETTINGS_FILE}: docs name {key!r} is not usable as a folder name")
+            continue
+        if name in used:
+            warnings.append(
+                f"{SETTINGS_FILE}: docs names {used[name]!r} and {key!r} are both {name!r}; "
+                f"{key!r} is skipped"
+            )
+            continue
+        used[name] = key
+        entries.append((name, value))
+    return entries, warnings
+
+
 def _load_settings(target: Path, create: bool = True) -> tuple[dict[str, Any], list[str]]:
     """`notes.yaml`: docs folders, topic rules and the todo list. Written once, then user-owned.
 
@@ -1277,11 +1324,8 @@ def _load_settings(target: Path, create: bool = True) -> tuple[dict[str, Any], l
     if not isinstance(data, dict):
         return settings, [f"{SETTINGS_FILE} must be a YAML mapping"]
     warnings: list[str] = []
-    docs = data.get("docs") or []
-    if isinstance(docs, list) and all(isinstance(item, str) for item in docs):
-        settings["docs"] = docs
-    else:
-        warnings.append(f"{SETTINGS_FILE}: docs must be a list of folder paths")
+    settings["docs"], docs_warnings = _docs_entries(data.get("docs"))
+    warnings.extend(docs_warnings)
     settings["todos"], todo_warnings = normalize_settings(data.get("todos"))
     warnings.extend(todo_warnings)
     topics = data.get("topics") or {}
@@ -1683,11 +1727,13 @@ class NotesBridge:
         todos, load_warnings = self._load_todos(target, settings, plan_ids)
         return todos, [*todo_warnings, *load_warnings]
 
-    def pages_dir(self, target: Path | None = None) -> tuple[Path, bool]:
-        """Where pages are stored, and whether sync mirrors that folder into the vault.
+    def pages_dir(self, target: Path | None = None) -> tuple[Path, bool, str]:
+        """Where pages are stored, whether sync mirrors that folder, and its vault folder name.
 
-        The first `docs:` folder named `pages`, else `.local/share/agops/pages` in the
-        agops home (AGOPS_HOME overrides the user's home, as for the other tool files).
+        The first `docs:` entry named `pages` - the mapping key, or for a list entry the
+        folder's own name - else `.local/share/agops/pages` in the agops home (AGOPS_HOME
+        overrides the user's home, as for the other tool files). The third value is the
+        `docs/<name>/` folder the pages are mirrored into.
         """
         if target is None:
             try:
@@ -1696,11 +1742,12 @@ class NotesBridge:
                 target = None
         if target is not None:
             settings, _ = _load_settings(target, create=False)
-            for raw in settings["docs"]:
+            for name, raw in settings["docs"]:
                 folder = Path(raw).expanduser()
-                if folder.name == "pages":
-                    return folder, True
-        return default_home() / DEFAULT_PAGES_DIR, False
+                # A mapping decides by its key, so its folder may have any name.
+                if (name or folder.name) == "pages":
+                    return folder, True, name or _workspace_dir(folder.name)
+        return default_home() / DEFAULT_PAGES_DIR, False, "pages"
 
     def add_page(
         self,
@@ -1743,7 +1790,7 @@ class NotesBridge:
             target = self.target()
         except ValueError:  # an explicit --repo hub has no notes profile
             target = None
-        folder, mirrored = self.pages_dir(target)
+        folder, mirrored, vault_folder = self.pages_dir(target)
         destination = folder / f"{plan_id}-{name}{PAGE_SUFFIX}"
         _atomic_write(destination, _tag_page(text, plan_id, task_id, title))
         result: dict[str, Any] = {"page": str(destination), "warnings": warnings}
@@ -1751,12 +1798,15 @@ class NotesBridge:
             warnings.append("No notes target is connected; the page is stored but not linked")
             return result
         if not mirrored:
-            warnings.append(f"Add {folder} to docs: in {target / SETTINGS_FILE} to link pages")
+            warnings.append(
+                f"Add {folder} to docs: in {target / SETTINGS_FILE} (as a folder named pages, "
+                "or under the name pages in a mapping) to link pages"
+            )
         rendered = self.render_all()
         result.update(rendered)
         result["warnings"] = [*warnings, *rendered["warnings"]]
         if mirrored:
-            vault = f"{DOCS_DIR}/{_workspace_dir(folder.name)}/{destination.name}"
+            vault = f"{DOCS_DIR}/{vault_folder}/{destination.name}"
             result["vault_path"] = str(target / vault)
         return result
 
@@ -1765,7 +1815,7 @@ class NotesBridge:
         target = self.target()
         if target is None:
             return []
-        folder, mirrored = self.pages_dir(target)
+        folder, mirrored, vault_folder = self.pages_dir(target)
         if not mirrored or not folder.is_dir():
             return []
         ids = {summary["id"] for summary in self.hub.list_plans()} | {plan_id}
@@ -1784,7 +1834,7 @@ class NotesBridge:
                         "title": " ".join(html.unescape(title.group(1)).split())
                         if title
                         else file.stem,
-                        "path": str(target / DOCS_DIR / _workspace_dir(folder.name) / file.name),
+                        "path": str(target / DOCS_DIR / vault_folder / file.name),
                     },
                 )
             )
@@ -2658,11 +2708,16 @@ class NotesBridge:
         return removed
 
     def _mirror_docs(
-        self, target: Path, sidecar: dict[str, Any], sources: list[str], warnings: list[str]
+        self,
+        target: Path,
+        sidecar: dict[str, Any],
+        sources: list[tuple[str | None, str]],
+        warnings: list[str],
     ) -> list[dict[str, Any]]:
-        """Copy each configured docs folder read-only into `docs/<folder>/`.
+        """Copy each configured docs folder read-only into `docs/<name>/`.
 
-        Markdown and images only; dot files, symlinks, and files with credential patterns are
+        `<name>` is the mapping key, or for a list entry the folder's own name. Markdown and
+        images only; dot files, symlinks, and files with credential patterns are
         skipped. A Markdown copy is named after its folder too (see `_doc_name`) so it never
         shares a plan's or a note's name, and links between the docs follow the new names. A
         copy edited in the vault is kept and no longer refreshed; a copy whose source is gone
@@ -2672,7 +2727,8 @@ class NotesBridge:
         produced: dict[str, str] = {}
         docs: list[dict[str, Any]] = []
         root = target.resolve()
-        for raw in sources:
+        claimed: dict[str, str] = {}
+        for name, raw in sources:
             source = Path(raw).expanduser().resolve()
             if not source.is_dir():
                 warnings.append(f"docs: {raw} is not a folder")
@@ -2680,7 +2736,16 @@ class NotesBridge:
             if source.is_relative_to(root) or root.is_relative_to(source):
                 warnings.append(f"docs: {raw} overlaps the notes folder")
                 continue
-            folder = _workspace_dir(source.name)
+            # A mapping names the folder; a list entry is named after the folder itself.
+            folder = name or _workspace_dir(source.name)
+            label = name or source.name
+            if folder in claimed:
+                warnings.append(
+                    f"docs: {raw} and {claimed[folder]} are both mirrored into "
+                    f"{DOCS_DIR}/{folder}/; files with the same path overwrite each other "
+                    "(give the folders names in a mapping)"
+                )
+            claimed.setdefault(folder, raw)
             files: list[Path] = []
             for directory, dirnames, filenames in os.walk(source):
                 dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
@@ -2694,7 +2759,7 @@ class NotesBridge:
             for file in files:
                 if file.suffix.lower() == ".md":
                     inner = file.relative_to(source).as_posix()
-                    renamed[inner] = _doc_name(inner, source.name)
+                    renamed[inner] = _doc_name(inner, label)
             for file in files:
                 suffix = file.suffix.lower()
                 inner = file.relative_to(source).as_posix()

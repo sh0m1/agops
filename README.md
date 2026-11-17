@@ -311,8 +311,12 @@ untouched earlier default is upgraded; a copy that still uses the old `agops_*` 
 as `agops.old.base` and replaced by the new default).
 
 `notes.yaml` in the folder is yours: agops writes a commented template once and only reads it after
-that. `docs:` lists folders whose Markdown and images are copied read-only into `docs/<folder>/` on
-every sync, so vault search and plan notes reach long-form documents. HTML files are mirrored too,
+that. `docs:` lists folders whose Markdown and images are copied read-only into `docs/<name>/` on
+every sync, so vault search and plan notes reach long-form documents. `docs:` is a list of
+folders, each named after the folder itself, or a mapping of name to folder
+(`projecta: ~/work/a/docs`). The mapping chooses the names, which you need when two folders are
+called the same, such as two repositories that both keep their documents in `docs`; a list with
+two same-named folders warns and merges them. HTML files are mirrored too,
 as pages: an agent's web page with diagrams sits beside the docs, keeps its name, takes its title
 from `<title>`, and opens in the browser from Obsidian. Images and `.drawio` files are diagrams.
 A plan links the docs, pages and diagrams named `<plan-id>.*` or `<plan-id>-*` (a name goes to
@@ -323,8 +327,9 @@ the longest plan id it starts with), any whose path its definition mentions, and
 `agops page add <file> --plan <id> [--task <id>] [--title T] [--slug S]` (MCP `hub_add_page`)
 stores a page as `<pages dir>/<plan-id>-<slug>.html`, sets both meta tags, rejects non-HTML,
 oversize and credential-like files, warns about remote scripts, runs a notes sync and prints
-the vault path. The pages dir is the first `docs:` folder named `pages`, else
-`~/.local/share/agops/pages` (list it under `docs:` so sync mirrors it). `agops brief` lists
+the vault path. The pages dir is the first `docs:` entry named `pages` (a folder called
+`pages`, or the name `pages` in a mapping), else `~/.local/share/agops/pages` (list it under
+`docs:` so sync mirrors it). `agops brief` lists
 up to 5 newest pages per active plan. Each Markdown copy carries its folder in its name
 (`workstreams/x.md` becomes `workstreams/x (workstreams).md`, with links between the docs
 rewritten), so a doc named after a plan never captures a `[[plan-id]]` link. Dot files, symlinks,
@@ -365,9 +370,10 @@ or invalid file is a warning, never a failed render.
 
 `agops setup` installs the packaged `agops-notes` skill for both Claude Code and Codex
 (`~/.claude/skills/` and `~/.codex/skills/`), so either agent can triage the notes vault - see
-"Notes apps" above. Re-run just this step with `agops skills install`. It never overwrites a
-skill directory you edited by hand (no `managed-by: agops` marker in its `SKILL.md`); such a
-directory is reported "skipped (unmanaged)" instead. With `todos:` set, the skill also triages
+"Notes apps" above. Re-run just this step with `agops skills install`, also after an
+upgrade: the skill text ships with the package. It never overwrites a skill directory you
+edited by hand (no `managed-by: agops` marker in its `SKILL.md`); such a directory is reported
+"skipped (unmanaged)" instead. With `todos:` set, the skill also triages
 the todo Inbox and proposes to sweep stray open checkboxes from other notes into it; it changes
 the todo file only after you confirm.
 

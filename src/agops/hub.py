@@ -774,6 +774,8 @@ class Hub:
         model: str | None = None,
         actor: str = "agent",
         session: str | None = None,
+        *,
+        page_urls: bool = False,
     ) -> str:
         project_id, remote = self.project_for_path(cwd)
         state = load_state(self.root)
@@ -868,7 +870,9 @@ class Hub:
                 detail = ", ".join(f"{count} {tier}" for tier, count in sorted(hidden.items()))
                 note = f"  - {sum(hidden.values())} task(s) hidden by tier: {detail}"
                 plan_items.append((note, None))
-            plan_items.extend((page, None) for page in self._page_brief(summary["id"]))
+            plan_items.extend(
+                (page, None) for page in self._page_brief(summary["id"], urls=page_urls)
+            )
 
         def plans_marker(dropped: list[BriefItem]) -> str | None:
             if not project_id:
@@ -946,13 +950,17 @@ class Hub:
         )
         return [*lines, *trailer]
 
-    def _page_brief(self, plan_id: str) -> list[str]:
+    def _page_brief(self, plan_id: str, *, urls: bool = False) -> list[str]:
         """The plan's newest pages (title and vault path); a notes problem just hides them."""
         try:
             pages = NotesBridge(self).recent_pages(plan_id)
         except (OSError, ValueError, yaml.YAMLError):
             return []
-        return [f"  - Page: {page['title']} — {page['path']}" for page in pages]
+        lines = []
+        for page in pages:
+            path = Path(page["path"]).absolute().as_uri() if urls else page["path"]
+            lines.append(f"  - Page: {page['title']} — {path}")
+        return lines
 
     def _todo_brief(
         self, project_id: str | None, remote: str | None, state: State, budget: int

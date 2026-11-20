@@ -1912,8 +1912,12 @@ def test_page_add_copies_tags_links_and_lists_in_brief(
     assert f"- **Pages:** {link}" in first  # the task callout links it too
     assert link not in note.split("`second`", 1)[1].split("## ", 1)[0]
     hub.approve_plan("shared-plan")
-    brief = hub.brief(make_project(tmp_path / "widgets"))
+    project = make_project(tmp_path / "widgets")
+    brief = hub.brief(project)
     assert f"Page: Flow — {result['vault_path']}" in brief
+    assert f"Page: Flow — {Path(result['vault_path']).as_uri()}" in hub.brief(
+        project, page_urls=True
+    )
 
     # Registering again replaces the page instead of adding a second one.
     bridge.add_page(source, "shared-plan", None, "Flow v2", "flow")
@@ -1967,6 +1971,7 @@ def test_page_add_without_a_notes_target_uses_the_agops_home(
     assert result["page"] == str(stored) and stored.is_file()
     assert any("No notes target" in warning for warning in result["warnings"])
     assert "vault_path" not in result
+    assert NotesBridge(hub).recent_pages() == [{"title": "A Title", "path": str(stored)}]
 
 
 def test_page_add_works_on_a_hub_opened_with_an_explicit_repo(

@@ -1807,26 +1807,35 @@ class NotesBridge:
         result["warnings"] = [*warnings, *rendered["warnings"]]
         if mirrored:
             vault = f"{DOCS_DIR}/{vault_folder}/{destination.name}"
-            result["vault_path"] = str(target / vault)
+            if (target / vault).is_file():
+                result["vault_path"] = str(target / vault)
         return result
 
-    def recent_pages(self, plan_id: str, limit: int = BRIEF_PAGE_LIMIT) -> list[dict[str, str]]:
-        """The newest pages that name the plan, read-only, for the brief."""
-        target = self.target()
-        if target is None:
-            return []
+    def recent_pages(
+        self, plan_id: str | None = None, limit: int = BRIEF_PAGE_LIMIT
+    ) -> list[dict[str, str]]:
+        """List the newest registered pages, optionally for one plan."""
+        try:
+            target = self.target()
+        except ValueError:  # an explicit --repo hub has no notes profile
+            target = None
         folder, mirrored, vault_folder = self.pages_dir(target)
-        if not mirrored or not folder.is_dir():
+        if not folder.is_dir():
             return []
-        ids = {summary["id"] for summary in self.hub.list_plans()} | {plan_id}
+        ids = {summary["id"] for summary in self.hub.list_plans()}
+        if plan_id and plan_id not in ids:
+            return []
+        selected = {plan_id} if plan_id else ids
         found: list[tuple[float, dict[str, str]]] = []
         for file in folder.glob(f"*{PAGE_SUFFIX}"):
             if file.name.startswith(".") or file.is_symlink() or not file.is_file():
                 continue
             text = file.read_text(encoding="utf-8", errors="replace")
-            if _named_for(file.stem, ids) != plan_id and plan_id not in _page_plans(text):
+            named_plan = _named_for(file.stem, ids)
+            if named_plan not in selected and selected.isdisjoint(_page_plans(text)):
                 continue
             title = _PAGE_TITLE.search(text)
+            copy = target / DOCS_DIR / vault_folder / file.name if target and mirrored else file
             found.append(
                 (
                     file.stat().st_mtime,
@@ -1834,7 +1843,7 @@ class NotesBridge:
                         "title": " ".join(html.unescape(title.group(1)).split())
                         if title
                         else file.stem,
-                        "path": str(target / DOCS_DIR / vault_folder / file.name),
+                        "path": str(copy if copy.is_file() else file),
                     },
                 )
             )

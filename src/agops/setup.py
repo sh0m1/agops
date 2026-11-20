@@ -51,7 +51,7 @@ CLI: keep one stable session ID. Prefix every call with `AGOPS_SESSION=<id> AGOP
 
 ## Pages
 
-Make an HTML page only for plans, architecture, reviews and multi-step debugging reports, not for one-line fixes or status. Write one self-contained file with inline SVG or Mermaid and no build step. Register it with `agops page add <file> --plan <id> [--task <id>]` (MCP `hub_add_page`) and cite the printed path in the task checkpoint. Claude also saves its Artifact HTML to a file and registers it before it publishes.
+For every plan, architecture proposal, review, and multi-step debugging report, create and register a self-contained HTML preview before you hand it off. Use inline SVG or Mermaid when a diagram helps. For routine fixes and status, create one when requested. Save Claude Artifacts to HTML too. Register with `agops page add <file> --plan <id> [--task <id>]` (MCP `hub_add_page`). Cite the returned path in the task checkpoint and link the preview in your reply. If registration fails, link the local HTML and report the failure.
 {MANAGED_END}
 """  # noqa: E501 - exact reviewed text; each paragraph is one line
 

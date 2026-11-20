@@ -492,6 +492,23 @@ def test_page_add_prints_one_path_and_json_keeps_the_result(
     assert capsys.readouterr().err == ""
 
 
+def test_page_list_links_escape_file_names_on_a_terminal(
+    active_hub: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pages = [{"title": "Flow", "path": "/vault with spaces/a #.html"}]
+
+    def recent_pages(bridge, plan):
+        assert plan == "plan-a"
+        return pages
+
+    monkeypatch.setattr(cli.NotesBridge, "recent_pages", recent_pages)
+    argv = ("page", "list", "--plan", "plan-a")
+    assert _text(active_hub, *argv) == "Flow\n/vault with spaces/a #.html"
+    monkeypatch.setattr(cli.sys.stdout, "isatty", lambda: True)
+    assert _text(active_hub, *argv) == "Flow\nfile:///vault%20with%20spaces/a%20%23.html"
+    assert _json(active_hub, *argv) == pages
+
+
 # --- MCP ---------------------------------------------------------------------------------
 
 

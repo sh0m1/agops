@@ -40,6 +40,11 @@ def emit(value: Any, as_json: bool = False) -> None:
         print(value, end="" if value.endswith("\n") else "\n")
 
 
+def page_link(path: str) -> str:
+    """Print a URL a terminal can open. Keep the path for pipes and scripts."""
+    return Path(path).absolute().as_uri() if sys.stdout.isatty() else path
+
+
 def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--repo", help="agops runtime clone")
@@ -71,6 +76,8 @@ def build_parser(prog: str = "agops") -> argparse.ArgumentParser:
     page_add.add_argument("--task")
     page_add.add_argument("--title")
     page_add.add_argument("--slug")
+    page_list = page_commands.add_parser("list")
+    page_list.add_argument("--plan", help="Only list pages for this plan")
     session_parser = commands.add_parser("session")
     session_parser.add_argument("--actor")
     session_parser.add_argument("--value", action="store_true")
@@ -302,20 +309,30 @@ def dispatch(args: argparse.Namespace) -> Any:
         require_human_confirmation(args.plan_id, args.yes, "resolve", noun="plan")
         return bridge.resolve(args.plan_id, args.take, actor, session)
     if args.command == "page":
-        added = NotesBridge(hub).add_page(
-            Path(args.file), args.plan, args.task, args.title, args.slug
-        )
+        bridge = NotesBridge(hub)
+        if args.page_command == "list":
+            pages = bridge.recent_pages(args.plan)
+            if args.json:
+                return pages
+            return (
+                "\n".join(
+                    f"{views.collapse(page['title'])}\n{page_link(page['path'])}" for page in pages
+                )
+                or "No pages found."
+            )
+        added = bridge.add_page(Path(args.file), args.plan, args.task, args.title, args.slug)
         if args.json:
             return added
         for warning in added.get("warnings", []):
             print(f"warning: {warning}", file=sys.stderr)
-        return views.format_page(added)
+        return page_link(views.format_page(added))
     if args.command == "brief":
         return hub.brief(
             Path(args.cwd),
             model=args.model,
             actor=os.environ.get("AGOPS_ACTOR", "agent"),
             session=default_session(),
+            page_urls=not args.json and sys.stdout.isatty(),
         )
     if args.command == "policy":
         return policy_report(hub, validate_only=args.policy_command == "validate")

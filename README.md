@@ -330,7 +330,10 @@ oversize and credential-like files, warns about remote scripts, runs a notes syn
 the vault path. The pages dir is the first `docs:` entry named `pages` (a folder called
 `pages`, or the name `pages` in a mapping), else `~/.local/share/agops/pages` (list it under
 `docs:` so sync mirrors it). `agops brief` lists
-up to 5 newest pages per active plan. Each Markdown copy carries its folder in its name
+up to 5 newest pages per active plan. Use `agops page list [--plan <id>]` to find recent pages,
+including pages for completed plans. Interactive output prints file URLs. In macOS Terminal,
+hold Command and double-click the URL. Piped output and JSON keep the filesystem paths.
+Each Markdown copy carries its folder in its name
 (`workstreams/x.md` becomes `workstreams/x (workstreams).md`, with links between the docs
 rewritten), so a doc named after a plan never captures a `[[plan-id]]` link. Dot files, symlinks,
 and files matching credential patterns are skipped, and a copy edited in the vault is kept and no
